@@ -43,13 +43,13 @@ export const Sidebar: React.FC = () => {
       to: '/ports',
       label: t('navPorts'),
       icon: Network,
-      roles: ['Admin', 'Engineer', 'Viewer'],
+      roles: ['Admin', 'Engineer'],
     },
     {
       to: '/vlans',
       label: t('navVlans'),
       icon: Layers,
-      roles: ['Admin', 'Engineer', 'Viewer'],
+      roles: ['Admin', 'Engineer'],
     },
     {
       to: '/access-points',
@@ -74,13 +74,13 @@ export const Sidebar: React.FC = () => {
       to: '/event-logs',
       label: t('navEventLogs'),
       icon: FileText,
-      roles: ['Admin', 'Engineer', 'Viewer'],
+      roles: ['Admin', 'Engineer'],
     },
     {
       to: '/statistics',
       label: t('navStatistics'),
       icon: BarChart3,
-      roles: ['Admin', 'Engineer', 'Viewer'],
+      roles: ['Admin', 'Engineer'],
     },
     // Users: Admin ONLY
     {

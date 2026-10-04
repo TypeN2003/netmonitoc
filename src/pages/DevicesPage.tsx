@@ -35,12 +35,16 @@ export const DevicesPage: React.FC = () => {
   const [search, setSearch] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [selectedLocation, setSelectedLocation] = useState<string>('all');
+
+  const locations = Array.from(new Set(devices.map(d => d.location))).sort();
 
   // Modal States
   const [showAddModal, setShowAddModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [activeDeviceForConfig, setActiveDeviceForConfig] = useState<NetworkDevice | null>(null);
   const [quickBackupMessage, setQuickBackupMessage] = useState<string | null>(null);
+  const [editingLocation, setEditingLocation] = useState<{ device: NetworkDevice; location: string; rack: string } | null>(null);
 
   // Add Device Form State
   const [newDevice, setNewDevice] = useState({
@@ -64,15 +68,22 @@ export const DevicesPage: React.FC = () => {
   });
 
   const filteredDevices = devices.filter(d => {
+    const q = search.toLowerCase();
     const matchesSearch =
-      d.name.toLowerCase().includes(search.toLowerCase()) ||
+      d.name.toLowerCase().includes(q) ||
       d.ip.includes(search) ||
-      d.vendor.toLowerCase().includes(search.toLowerCase()) ||
-      d.location.toLowerCase().includes(search.toLowerCase());
+      d.model.toLowerCase().includes(q) ||
+      d.vendor.toLowerCase().includes(q) ||
+      d.location.toLowerCase().includes(q) ||
+      d.rack.toLowerCase().includes(q);
     const matchesType = selectedType === 'all' || d.type === selectedType;
     const matchesStatus = selectedStatus === 'all' || d.status === selectedStatus;
-    return matchesSearch && matchesType && matchesStatus;
+    const matchesLocation = selectedLocation === 'all' || d.location === selectedLocation;
+    return matchesSearch && matchesType && matchesStatus && matchesLocation;
   });
+
+  const formatMbps = (mbps?: number) =>
+    mbps === undefined ? '—' : mbps >= 1000 ? `${(mbps / 1000).toFixed(2)} Gbps` : `${mbps} Mbps`;
 
   const handleOpenConfigModal = (device: NetworkDevice) => {
     setActiveDeviceForConfig(device);
@@ -110,6 +121,16 @@ export const DevicesPage: React.FC = () => {
       firmware: 'Cisco IOS-XE 17.09.01',
       snmpCommunity: 'public_ro',
     });
+  };
+
+  const handleSaveLocation = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingLocation) return;
+    updateDevice(editingLocation.device.id, {
+      location: editingLocation.location.trim(),
+      rack: editingLocation.rack.trim(),
+    });
+    setEditingLocation(null);
   };
 
   const getStatusBadge = (status: string) => {
@@ -245,6 +266,23 @@ export const DevicesPage: React.FC = () => {
               <option value="offline">Offline</option>
             </select>
           </div>
+
+          {/* Location Filter */}
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <span className="text-slate-500 text-[11px] whitespace-nowrap">{t('locationFilter')}:</span>
+            <select
+              value={selectedLocation}
+              onChange={e => setSelectedLocation(e.target.value)}
+              className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none max-w-[200px]"
+            >
+              <option value="all">{t('allLocations')}</option>
+              {locations.map(loc => (
+                <option key={loc} value={loc}>
+                  {loc}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -262,6 +300,7 @@ export const DevicesPage: React.FC = () => {
                 <th className="py-3 px-4 text-center">{t('statusFilter')}</th>
                 <th className="py-3 px-4 text-right">{t('uptime')}</th>
                 <th className="py-3 px-4 text-right">{t('cpuRam')}</th>
+                <th className="py-3 px-4 text-right">{t('trafficInOut')}</th>
                 <th className="py-3 px-4 text-right">{t('portsUp')}</th>
                 <th className="py-3 px-4 text-center">{t('actions')}</th>
               </tr>
@@ -269,7 +308,7 @@ export const DevicesPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans">
               {filteredDevices.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-slate-400">
+                  <td colSpan={11} className="py-8 text-center text-slate-400">
                     No hardware devices matching current filters
                   </td>
                 </tr>
@@ -327,6 +366,12 @@ export const DevicesPage: React.FC = () => {
                       <div className="text-[10px] text-slate-400">RAM: {device.ram}%</div>
                     </td>
 
+                    {/* Traffic In / Out */}
+                    <td className="py-3 px-4 text-right font-mono tabular-nums whitespace-nowrap">
+                      <div className="text-cyan-600 dark:text-cyan-400">↓ {formatMbps(device.trafficInMbps)}</div>
+                      <div className="text-[10px] text-slate-400">↑ {formatMbps(device.trafficOutMbps)}</div>
+                    </td>
+
                     {/* Ports UP / Total */}
                     <td className="py-3 px-4 text-right font-mono tabular-nums">
                       <span className="font-semibold text-emerald-600 dark:text-emerald-400">{device.portsUp}</span>
@@ -336,14 +381,27 @@ export const DevicesPage: React.FC = () => {
                     {/* Actions */}
                     <td className="py-3 px-4 text-center">
                       <div className="flex items-center justify-center gap-1.5">
-                        {/* Inspect Ports (All Roles) */}
-                        <button
-                          onClick={() => navigate('/ports')}
-                          title={t('inspectPorts')}
-                          className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-cyan-500 transition-colors"
-                        >
-                          <Network className="w-3.5 h-3.5" />
-                        </button>
+                        {/* Inspect Ports (Admin & Engineer) */}
+                        {!isViewer && (
+                          <button
+                            onClick={() => navigate('/ports')}
+                            title={t('inspectPorts')}
+                            className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-cyan-500 transition-colors"
+                          >
+                            <Network className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {/* Edit Location / Rack (Admin & Engineer) */}
+                        {(isAdmin || isEngineer) && (
+                          <button
+                            onClick={() => setEditingLocation({ device, location: device.location, rack: device.rack })}
+                            title="Edit Location / Rack"
+                            className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-amber-500 transition-colors"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                        )}
 
                         {/* Import Config (Admin & Engineer) */}
                         {(isAdmin || isEngineer) && (
@@ -495,6 +553,74 @@ export const DevicesPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
+                  className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-semibold"
+                >
+                  {t('cancel')}
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold"
+                >
+                  {t('save')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit Location / Rack (Admin & Engineer) */}
+      {editingLocation && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Edit className="w-5 h-5 text-amber-500" />
+                  Edit Location / Rack
+                </h3>
+                <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                  {editingLocation.device.name} [{editingLocation.device.ip}]
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingLocation(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveLocation} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('locationRack')}</label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={editingLocation.location}
+                  onChange={e => setEditingLocation({ ...editingLocation, location: e.target.value })}
+                  placeholder="Building B - Floor 3"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">Rack Designation</label>
+                <input
+                  type="text"
+                  required
+                  value={editingLocation.rack}
+                  onChange={e => setEditingLocation({ ...editingLocation, rack: e.target.value })}
+                  placeholder="Rack-B3 (Unit 10)"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingLocation(null)}
                   className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-semibold"
                 >
                   {t('cancel')}

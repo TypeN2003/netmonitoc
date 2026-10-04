@@ -50,13 +50,13 @@ export default function App() {
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/dashboard" element={<DashboardPage />} />
                   <Route path="/devices" element={<DevicesPage />} />
-                  <Route path="/ports" element={<PortsPage />} />
-                  <Route path="/vlans" element={<VlansPage />} />
+                  <Route path="/ports" element={<ProtectedRoute allowedRoles={['Admin', 'Engineer']}><PortsPage /></ProtectedRoute>} />
+                  <Route path="/vlans" element={<ProtectedRoute allowedRoles={['Admin', 'Engineer']}><VlansPage /></ProtectedRoute>} />
                   <Route path="/access-points" element={<AccessPointsPage />} />
                   <Route path="/topology" element={<TopologyPage />} />
                   <Route path="/alerts" element={<AlertsPage />} />
-                  <Route path="/event-logs" element={<EventLogsPage />} />
-                  <Route path="/statistics" element={<StatisticsPage />} />
+                  <Route path="/event-logs" element={<ProtectedRoute allowedRoles={['Admin', 'Engineer']}><EventLogsPage /></ProtectedRoute>} />
+                  <Route path="/statistics" element={<ProtectedRoute allowedRoles={['Admin', 'Engineer']}><StatisticsPage /></ProtectedRoute>} />
 
                   {/* Admin Only Route */}
                   <Route

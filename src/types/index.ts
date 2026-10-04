@@ -50,6 +50,8 @@ export interface NetworkDevice {
   portsTotal: number;
   portsUp: number;
   pingMs: number;
+  trafficInMbps?: number;
+  trafficOutMbps?: number;
   lastSeen: string;
   firmware: string;
   config?: string;
@@ -230,7 +232,6 @@ export interface SystemSettings {
   snmpInterval: number;
   pingTimeoutMs: number;
   packetLossThreshold: number;
-  slackWebhook: string;
   telegramBotToken: string;
   telegramChatId: string;
   emailNotification: string;

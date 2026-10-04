@@ -2,6 +2,7 @@ import React from 'react';
 import { Outlet } from 'react-router-dom';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
+import { AlertNotifier } from './AlertNotifier';
 
 export const MainLayout: React.FC = () => {
   return (
@@ -13,6 +14,7 @@ export const MainLayout: React.FC = () => {
           <Outlet />
         </main>
       </div>
+      <AlertNotifier />
     </div>
   );
 };

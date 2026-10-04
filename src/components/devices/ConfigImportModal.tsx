@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useNetworkData } from '../../context/NetworkDataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -10,18 +10,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
-  ShieldAlert,
-  ArrowRight,
   Split,
   FileText,
   RotateCcw,
-  Sparkles,
-  Server,
   Code2,
   Clock,
-  Check,
-  Eye,
-  Sliders,
 } from 'lucide-react';
 
 interface ConfigImportModalProps {
@@ -163,287 +156,202 @@ end`,
   },
 };
 
+type ValidationMessage = { type: 'error' | 'warning' | 'info'; text: string; line?: number };
+type ValidationResult = { status: 'idle' | 'valid' | 'warning' | 'error'; messages: ValidationMessage[] };
+
+// Syntax & security checks for CLI (Cisco / Fortinet / Aruba) and JSON configs
+const validateConfig = (content: string): ValidationResult => {
+  const messages: ValidationMessage[] = [];
+  let hasError = false;
+  let hasWarning = false;
+
+  if (!content.trim()) {
+    return { status: 'idle', messages: [] };
+  }
+
+  if (content.trim().startsWith('{')) {
+    try {
+      JSON.parse(content);
+      messages.push({ type: 'info', text: 'Valid JSON syntax confirmed. Complies with NetMonitor schema v2.' });
+    } catch (err: any) {
+      hasError = true;
+      messages.push({ type: 'error', text: `JSON Parse Syntax Error: ${err.message}` });
+    }
+  } else {
+    let foundHostname = false;
+    let openBlocks = 0;
+
+    content.split('\n').forEach((rawLine, idx) => {
+      const line = rawLine.trim();
+      const lower = line.toLowerCase();
+      const lineNum = idx + 1;
+
+      if (lower.startsWith('hostname ') || lower.startsWith('set hostname')) {
+        foundHostname = true;
+      }
+
+      if (lower.includes('transport input telnet') || lower.includes('telnet enable')) {
+        hasWarning = true;
+        messages.push({ type: 'warning', line: lineNum, text: 'Insecure plaintext Telnet protocol detected. Prefer SSHv2.' });
+      }
+
+      if (lower.startsWith('password ') && !lower.includes('7 ') && !lower.includes('secret ')) {
+        hasWarning = true;
+        messages.push({ type: 'warning', line: lineNum, text: 'Plaintext password without encryption hash. Use "enable secret" or "service password-encryption".' });
+      }
+
+      if (lower.startsWith('ip http server') && !lower.includes('secure')) {
+        hasWarning = true;
+        messages.push({ type: 'warning', line: lineNum, text: 'Unencrypted HTTP management enabled. Prefer "ip http secure-server".' });
+      }
+
+      const ipMatch = line.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g);
+      ipMatch?.forEach(ip => {
+        if (ip.split('.').map(Number).some(o => o < 0 || o > 255)) {
+          hasError = true;
+          messages.push({ type: 'error', line: lineNum, text: `Invalid IP address ${ip} (each octet must be 0-255).` });
+        }
+      });
+
+      // Block balance for FortiOS
+      if (line.startsWith('config ') || line.startsWith('edit ')) openBlocks++;
+      if (line === 'end' || line === 'next') openBlocks = Math.max(0, openBlocks - 1);
+    });
+
+    if (!foundHostname) {
+      hasWarning = true;
+      messages.push({ type: 'warning', text: 'No "hostname" directive. Device will keep its current name.' });
+    }
+
+    if (openBlocks > 0) {
+      hasWarning = true;
+      messages.push({ type: 'warning', text: `${openBlocks} unclosed configuration block(s) (missing 'end' or 'next').` });
+    }
+  }
+
+  return { status: hasError ? 'error' : hasWarning ? 'warning' : 'valid', messages };
+};
+
+const getRunningConfig = (device?: NetworkDevice) =>
+  device
+    ? device.config ||
+      `! Running configuration for ${device.name} [${device.ip}]\n! Vendor: ${device.vendor} ${device.model}\nhostname ${device.name}\n!\nend`
+    : '';
+
+const StepLabel: React.FC<{ step: number; children: React.ReactNode }> = ({ step, children }) => (
+  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+    <span className="w-5 h-5 rounded-full bg-cyan-600 text-white text-[11px] flex items-center justify-center">{step}</span>
+    {children}
+  </div>
+);
+
 export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
   isOpen,
   onClose,
   targetDevice,
 }) => {
-  const { t, lang } = useLanguage();
+  const { t } = useLanguage();
   const { devices, importDeviceConfig } = useNetworkData();
   const { currentUser, isViewer } = useAuth();
 
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
-    targetDevice?.id || devices[0]?.id || ''
-  );
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
   const [configContent, setConfigContent] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
-  const [fileSize, setFileSize] = useState<number>(0);
   const [isDragging, setIsDragging] = useState(false);
   const [activeTab, setActiveTab] = useState<'editor' | 'diff'>('editor');
-
-  // Options
   const [deploymentMode, setDeploymentMode] = useState<'merge' | 'replace'>('merge');
   const [enableRollback, setEnableRollback] = useState(true);
-  const [changeNote, setChangeNote] = useState('');
-
-  // Validation State
-  const [validationResult, setValidationResult] = useState<{
-    status: 'idle' | 'valid' | 'warning' | 'error';
-    messages: { type: 'error' | 'warning' | 'info'; text: string; line?: number }[];
-  }>({ status: 'idle', messages: [] });
-
-  // Deployment progress
   const [isDeploying, setIsDeploying] = useState(false);
   const [deploySuccess, setDeploySuccess] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
 
-  // Sync selected device
-  useEffect(() => {
-    if (targetDevice) {
-      setSelectedDeviceId(targetDevice.id);
-    } else if (devices.length > 0 && !selectedDeviceId) {
-      setSelectedDeviceId(devices[0].id);
-    }
-  }, [targetDevice, devices]);
-
-  // When selected device changes, if no custom config loaded, initialize with running config or hint
   const currentDevice = devices.find(d => d.id === selectedDeviceId);
+  const runningConfig = getRunningConfig(currentDevice);
+  const isDirty = configContent !== runningConfig;
 
+  // Start from a clean slate every time the modal opens
   useEffect(() => {
-    if (currentDevice && !configContent) {
-      setConfigContent(
-        currentDevice.config ||
-          `! Running configuration for ${currentDevice.name} [${currentDevice.ip}]\n! Vendor: ${currentDevice.vendor} ${currentDevice.model}\nhostname ${currentDevice.name}\n!\nend`
-      );
+    if (!isOpen) return;
+    const device = targetDevice || devices[0];
+    setSelectedDeviceId(device?.id || '');
+    setConfigContent(getRunningConfig(device));
+    setFileName('');
+    setActiveTab('editor');
+    setDeploymentMode('merge');
+    setEnableRollback(true);
+    setIsDeploying(false);
+    setDeploySuccess(false);
+  }, [isOpen, targetDevice]);
+
+  const validation = useMemo(() => validateConfig(configContent), [configContent]);
+
+  // Line-by-line diff between current running config & proposed config
+  const { diffLines, addedCount, removedCount } = useMemo(() => {
+    const running = (currentDevice?.config || '').split('\n');
+    const proposed = configContent.split('\n');
+    const runningSet = new Set(running.map(l => l.trim()));
+    const proposedSet = new Set(proposed.map(l => l.trim()));
+
+    const lines: { type: 'added' | 'removed' | 'unchanged'; content: string; lineNum?: number }[] = [];
+
+    if (deploymentMode === 'replace') {
+      running.forEach((line, idx) => {
+        if (line.trim() && !proposedSet.has(line.trim())) {
+          lines.push({ type: 'removed', content: line, lineNum: idx + 1 });
+        }
+      });
     }
-  }, [currentDevice]);
+
+    proposed.forEach((line, idx) => {
+      const added = line.trim() && !runningSet.has(line.trim());
+      lines.push({ type: added ? 'added' : 'unchanged', content: line, lineNum: idx + 1 });
+    });
+
+    return {
+      diffLines: lines,
+      addedCount: lines.filter(d => d.type === 'added').length,
+      removedCount: lines.filter(d => d.type === 'removed').length,
+    };
+  }, [currentDevice, configContent, deploymentMode]);
 
   if (!isOpen) return null;
 
-  // Handle Drag & Drop
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
+  const loadContent = (content: string, name: string) => {
+    setConfigContent(content);
+    setFileName(name);
+    setActiveTab('editor');
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const processFile = (file: File) => {
+  const processFile = (file?: File) => {
     if (!file) return;
-    setFileName(file.name);
-    setFileSize(file.size);
-
     const reader = new FileReader();
     reader.onload = ev => {
       const text = ev.target?.result as string;
-      if (text) {
-        setConfigContent(text);
-        runSyntaxValidation(text);
-      }
+      if (text) loadContent(text, `${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
     };
     reader.readAsText(file);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      processFile(file);
-    }
+  const handleDeviceChange = (id: string) => {
+    if (isDirty && !confirm(t('cfgConfirmDiscard'))) return;
+    setSelectedDeviceId(id);
+    loadContent(getRunningConfig(devices.find(d => d.id === id)), '');
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      processFile(file);
-    }
+  const handleLoadTemplate = (key: string) => {
+    const tpl = SAMPLE_TEMPLATES[key as keyof typeof SAMPLE_TEMPLATES];
+    if (tpl) loadContent(tpl.content, tpl.name);
   };
 
-  // Run comprehensive syntax & security validation
-  const runSyntaxValidation = (content: string = configContent) => {
-    const lines = content.split('\n');
-    const messages: { type: 'error' | 'warning' | 'info'; text: string; line?: number }[] = [];
-    let hasError = false;
-    let hasWarning = false;
-
-    if (!content.trim()) {
-      setValidationResult({
-        status: 'error',
-        messages: [{ type: 'error', text: 'Configuration payload is empty' }],
-      });
-      return;
-    }
-
-    // Check JSON if content starts with {
-    if (content.trim().startsWith('{')) {
-      try {
-        JSON.parse(content);
-        messages.push({
-          type: 'info',
-          text: 'Valid JSON syntax confirmed. Complies with NetMonitor schema v2.',
-        });
-      } catch (err: any) {
-        hasError = true;
-        messages.push({
-          type: 'error',
-          text: `JSON Parse Syntax Error: ${err.message}`,
-        });
-      }
-    } else {
-      // CLI / Cisco / Fortinet / Aruba syntax checks
-      let foundHostname = false;
-      let openBlocks = 0;
-
-      lines.forEach((rawLine, idx) => {
-        const line = rawLine.trim();
-        const lineNum = idx + 1;
-
-        if (line.toLowerCase().startsWith('hostname ') || line.toLowerCase().startsWith('set hostname')) {
-          foundHostname = true;
-        }
-
-        // Security check: Unencrypted telnet
-        if (line.toLowerCase().includes('transport input telnet') || line.toLowerCase().includes('telnet enable')) {
-          hasWarning = true;
-          messages.push({
-            type: 'warning',
-            line: lineNum,
-            text: 'Security Warning: Insecure plaintext Telnet protocol detected. Prefer SSHv2.',
-          });
-        }
-
-        // Security check: Plaintext password
-        if (line.toLowerCase().startsWith('password ') && !line.toLowerCase().includes('7 ') && !line.toLowerCase().includes('secret ')) {
-          hasWarning = true;
-          messages.push({
-            type: 'warning',
-            line: lineNum,
-            text: 'Security Warning: Plaintext password without encryption hash. Recommend "service password-encryption" or "enable secret".',
-          });
-        }
-
-        // Security check: Insecure HTTP web GUI
-        if (line.toLowerCase().startsWith('ip http server') && !line.toLowerCase().includes('secure')) {
-          hasWarning = true;
-          messages.push({
-            type: 'warning',
-            line: lineNum,
-            text: 'Security Advisory: Unencrypted HTTP web management active. Prefer "ip http secure-server".',
-          });
-        }
-
-        // Check for common malformed IP pattern
-        const ipMatch = line.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g);
-        if (ipMatch) {
-          ipMatch.forEach(ip => {
-            const octets = ip.split('.').map(Number);
-            if (octets.some(o => o < 0 || o > 255)) {
-              hasError = true;
-              messages.push({
-                type: 'error',
-                line: lineNum,
-                text: `Syntax Error: Invalid IP octet value (${ip}) outside 0-255 range.`,
-              });
-            }
-          });
-        }
-
-        // Check block balance for FortiOS
-        if (line.startsWith('config ') || line.startsWith('edit ')) openBlocks++;
-        if (line === 'end' || line === 'next') openBlocks = Math.max(0, openBlocks - 1);
-      });
-
-      if (!foundHostname) {
-        messages.push({
-          type: 'warning',
-          text: 'Notice: No "hostname" directive defined in script. Device will retain previous name.',
-        });
-        hasWarning = true;
-      }
-
-      if (openBlocks > 0) {
-        messages.push({
-          type: 'warning',
-          text: `Warning: ${openBlocks} unclosed configuration block(s) detected (missing 'end' or 'next').`,
-        });
-        hasWarning = true;
-      }
-
-      if (!hasError && !hasWarning) {
-        messages.push({
-          type: 'info',
-          text: 'CLI command structure validated. Interfaces, subnets, and credentials syntax passed.',
-        });
-      }
-    }
-
-    setValidationResult({
-      status: hasError ? 'error' : hasWarning ? 'warning' : 'valid',
-      messages,
-    });
-  };
-
-  // Compute visual line-by-line diff between current running config & new proposed config
-  const computeDiff = () => {
-    const running = (currentDevice?.config || '').split('\n');
-    const proposed = configContent.split('\n');
-
-    const runningSet = new Set(running.map(l => l.trim()));
-    const proposedSet = new Set(proposed.map(l => l.trim()));
-
-    const diffLines: {
-      type: 'added' | 'removed' | 'unchanged';
-      content: string;
-      lineNum?: number;
-    }[] = [];
-
-    // Removed lines (in running but not in proposed if replace mode)
-    if (deploymentMode === 'replace') {
-      running.forEach((line, idx) => {
-        const trimmed = line.trim();
-        if (trimmed && !proposedSet.has(trimmed)) {
-          diffLines.push({ type: 'removed', content: line, lineNum: idx + 1 });
-        }
-      });
-    }
-
-    // Lines in proposed
-    proposed.forEach((line, idx) => {
-      const trimmed = line.trim();
-      if (trimmed && !runningSet.has(trimmed)) {
-        diffLines.push({ type: 'added', content: line, lineNum: idx + 1 });
-      } else {
-        diffLines.push({ type: 'unchanged', content: line, lineNum: idx + 1 });
-      }
-    });
-
-    const addedCount = diffLines.filter(d => d.type === 'added').length;
-    const removedCount = diffLines.filter(d => d.type === 'removed').length;
-
-    return { diffLines, addedCount, removedCount };
-  };
-
-  const { diffLines, addedCount, removedCount } = computeDiff();
-
-  // Load sample template
-  const handleLoadTemplate = (key: keyof typeof SAMPLE_TEMPLATES) => {
-    const tpl = SAMPLE_TEMPLATES[key];
-    setConfigContent(tpl.content);
-    setFileName(`template_${key}.cfg`);
-    setFileSize(tpl.content.length);
-    runSyntaxValidation(tpl.content);
-  };
-
-  // Apply & Deploy configuration
-  const handleDeploy = async () => {
+  const handleDeploy = () => {
     if (!currentDevice) return;
     if (isViewer) {
       alert('Access Denied: Viewer accounts have read-only privileges.');
+      return;
+    }
+    if (deploymentMode === 'replace' && !confirm(t('cfgConfirmReplace').replace('{name}', currentDevice.name))) {
       return;
     }
 
@@ -452,17 +360,9 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
     // Simulate connection and checksum transmission
     setTimeout(() => {
       const author = currentUser ? `${currentUser.name} (${currentUser.role})` : 'Operator';
-      importDeviceConfig(
-        currentDevice.id,
-        configContent,
-        deploymentMode,
-        enableRollback,
-        author
-      );
-
+      importDeviceConfig(currentDevice.id, configContent, deploymentMode, enableRollback, author);
       setIsDeploying(false);
       setDeploySuccess(true);
-
       setTimeout(() => {
         setDeploySuccess(false);
         onClose();
@@ -471,30 +371,26 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
   };
 
   const totalLines = configContent ? configContent.split('\n').length : 0;
-  const totalChars = configContent.length;
+  const hasChanges = addedCount > 0 || removedCount > 0;
+  const canDeploy = !isDeploying && !isViewer && !!currentDevice && configContent.trim() !== '' && validation.status !== 'error' && hasChanges;
 
   return (
     <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-4xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-3xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
-        <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex items-center justify-between border-b border-slate-800">
+        <div className="px-6 py-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+            <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-500">
               <FileCode2 className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold flex items-center gap-2">
-                <span>{t('configImportTitle')}</span>
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-700 text-cyan-300 font-mono font-medium">
-                  v2.4 Engine
-                </span>
-              </h2>
-              <p className="text-xs text-slate-400">{t('configImportSub')}</p>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white">{t('configImportTitle')}</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">{t('configImportSub')}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -502,303 +398,262 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
 
         {/* Success Alert Banner */}
         {deploySuccess && (
-          <div className="p-4 bg-emerald-950/90 border-b border-emerald-700 text-emerald-200 text-xs flex items-center justify-between animate-fadeIn">
+          <div className="p-4 bg-emerald-50 dark:bg-emerald-950/90 border-b border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 text-xs flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 text-emerald-400 animate-bounce" />
+              <CheckCircle2 className="w-5 h-5 text-emerald-500" />
               <span className="font-semibold">{t('deploySuccess')}</span>
             </div>
-            <span className="font-mono text-[11px] text-emerald-300">
-              Device: {currentDevice?.name} ({currentDevice?.ip})
+            <span className="font-mono text-[11px]">
+              {currentDevice?.name} ({currentDevice?.ip})
             </span>
           </div>
         )}
 
-        <div className="p-5 overflow-y-auto space-y-4 flex-1">
-          {/* Row 1: Target Device Selector & Sample Templates */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Device Selector */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                <Server className="w-3.5 h-3.5 text-cyan-500" />
-                <span>{t('selectTargetDevice')}</span>
-                <span className="text-rose-500">*</span>
-              </label>
-              <select
-                value={selectedDeviceId}
-                onChange={e => setSelectedDeviceId(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500"
+        <div className="p-5 overflow-y-auto space-y-5 flex-1">
+          {/* Step 1: Target Device */}
+          <section className="space-y-2">
+            <StepLabel step={1}>{t('cfgStepDevice')}</StepLabel>
+            <select
+              value={selectedDeviceId}
+              onChange={e => handleDeviceChange(e.target.value)}
+              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500"
+            >
+              {devices.map(d => (
+                <option key={d.id} value={d.id}>
+                  {d.name} — {d.ip} ({d.type})
+                </option>
+              ))}
+            </select>
+            {currentDevice && (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono px-1">
+                {currentDevice.vendor} · {currentDevice.model}
+              </p>
+            )}
+          </section>
+
+          {/* Step 2: Config Content */}
+          <section className="space-y-2">
+            <StepLabel step={2}>{t('cfgStepConfig')}</StepLabel>
+
+            {/* Source toolbar */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center gap-1.5"
               >
-                {devices.map(d => (
-                  <option key={d.id} value={d.id}>
-                    [{d.type}] {d.name} — {d.ip} ({d.vendor})
+                <Upload className="w-3.5 h-3.5" />
+                {t('cfgUploadFile')}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".cfg,.txt,.json,.conf,.text"
+                onChange={e => {
+                  processFile(e.target.files?.[0]);
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+
+              <select
+                value=""
+                onChange={e => handleLoadTemplate(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              >
+                <option value="" disabled>
+                  {t('cfgTemplatePlaceholder')}
+                </option>
+                {Object.entries(SAMPLE_TEMPLATES).map(([key, tpl]) => (
+                  <option key={key} value={key}>
+                    {tpl.name}
                   </option>
                 ))}
               </select>
 
-              {currentDevice && (
-                <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400 font-mono px-1">
-                  <span>Vendor: {currentDevice.vendor}</span>
-                  <span>•</span>
-                  <span>Model: {currentDevice.model}</span>
-                  <span>•</span>
-                  <span className="text-emerald-500 font-semibold uppercase">{currentDevice.status}</span>
+              {isDirty && (
+                <button
+                  type="button"
+                  onClick={() => loadContent(runningConfig, '')}
+                  className="px-2.5 py-1.5 rounded-lg text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  {t('cfgResetRunning')}
+                </button>
+              )}
+
+              {fileName && (
+                <span className="text-[11px] text-cyan-600 dark:text-cyan-400 flex items-center gap-1 truncate max-w-full">
+                  <FileText className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{fileName}</span>
+                </span>
+              )}
+            </div>
+
+            {/* Editor / Diff tabs */}
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-50 dark:bg-slate-950">
+              <div className="flex items-center justify-between px-2 py-1.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('editor')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 ${
+                      activeTab === 'editor'
+                        ? 'bg-cyan-50 dark:bg-cyan-950/50 text-cyan-700 dark:text-cyan-300'
+                        : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <Code2 className="w-3.5 h-3.5" />
+                    {t('configEditor')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('diff')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 ${
+                      activeTab === 'diff'
+                        ? 'bg-cyan-50 dark:bg-cyan-950/50 text-cyan-700 dark:text-cyan-300'
+                        : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <Split className="w-3.5 h-3.5" />
+                    {t('compareDiff')}
+                    {hasChanges && (
+                      <span className="font-mono text-[10px]">
+                        <span className="text-emerald-600 dark:text-emerald-400">+{addedCount}</span>
+                        {removedCount > 0 && <span className="text-rose-600 dark:text-rose-400"> -{removedCount}</span>}
+                      </span>
+                    )}
+                  </button>
+                </div>
+                <span className="text-[11px] text-slate-400 font-mono">
+                  {totalLines} {t('cfgLines')}
+                </span>
+              </div>
+
+              {activeTab === 'editor' ? (
+                <div
+                  className="relative flex h-72"
+                  onDragOver={e => {
+                    e.preventDefault();
+                    setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={e => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    processFile(e.dataTransfer.files?.[0]);
+                  }}
+                >
+                  {/* Line numbers (scroll-synced with the textarea) */}
+                  <div
+                    ref={gutterRef}
+                    className="w-10 py-3 overflow-hidden bg-slate-100/70 dark:bg-slate-900/60 text-slate-400 dark:text-slate-600 font-mono text-xs select-none text-right pr-2 border-r border-slate-200 dark:border-slate-800"
+                  >
+                    {Array.from({ length: Math.max(1, totalLines) }).map((_, i) => (
+                      <div key={i} className="leading-5">
+                        {i + 1}
+                      </div>
+                    ))}
+                  </div>
+                  <textarea
+                    value={configContent}
+                    onChange={e => setConfigContent(e.target.value)}
+                    onScroll={e => {
+                      if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
+                    }}
+                    spellCheck={false}
+                    placeholder={t('cfgEditorHint')}
+                    className="flex-1 bg-transparent text-slate-800 dark:text-emerald-400 font-mono text-xs p-3 focus:outline-none leading-5 resize-none whitespace-pre overflow-auto"
+                  />
+                  {isDragging && (
+                    <div className="absolute inset-0 border-2 border-dashed border-cyan-500 bg-cyan-500/10 rounded-b-xl flex flex-col items-center justify-center gap-1.5 text-cyan-700 dark:text-cyan-300 text-xs font-semibold pointer-events-none">
+                      <Upload className="w-5 h-5" />
+                      {t('cfgDropHint')}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="h-72 overflow-y-auto p-2 space-y-0.5 font-mono text-xs">
+                  {!hasChanges ? (
+                    <div className="text-slate-500 text-center py-8">{t('cfgNoChanges')}</div>
+                  ) : (
+                    diffLines.map((line, idx) => (
+                      <div
+                        key={idx}
+                        className={`flex items-start px-2 py-0.5 rounded leading-5 ${
+                          line.type === 'added'
+                            ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-l-2 border-emerald-500'
+                            : line.type === 'removed'
+                            ? 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-l-2 border-rose-500'
+                            : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        <span className="w-8 select-none text-slate-400 dark:text-slate-600 text-[10px] text-right pr-2">
+                          {line.lineNum || ''}
+                        </span>
+                        <span className="w-4 select-none font-bold">
+                          {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
+                        </span>
+                        <span className="flex-1 whitespace-pre-wrap">{line.content}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
             </div>
 
-            {/* Quick Sample Templates */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                <span>{t('loadSampleTemplate')}</span>
-              </label>
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => handleLoadTemplate('cisco_trunk')}
-                  className="px-2.5 py-1.5 text-left rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-cyan-50 dark:hover:bg-cyan-950/40 hover:border-cyan-400 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300 truncate transition-colors"
-                >
-                  ⚡ {t('templateCiscoTrunk')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleLoadTemplate('cisco_ospf')}
-                  className="px-2.5 py-1.5 text-left rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-cyan-50 dark:hover:bg-cyan-950/40 hover:border-cyan-400 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300 truncate transition-colors"
-                >
-                  ⚡ {t('templateCiscoOspf')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleLoadTemplate('forti_firewall')}
-                  className="px-2.5 py-1.5 text-left rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-cyan-50 dark:hover:bg-cyan-950/40 hover:border-cyan-400 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300 truncate transition-colors"
-                >
-                  ⚡ {t('templateFortiPolicy')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleLoadTemplate('json_interface')}
-                  className="px-2.5 py-1.5 text-left rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-cyan-50 dark:hover:bg-cyan-950/40 hover:border-cyan-400 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300 truncate transition-colors"
-                >
-                  ⚡ {t('templateJsonConfig')}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Drag & Drop File Upload Area */}
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${
-              isDragging
-                ? 'border-cyan-500 bg-cyan-500/10'
-                : 'border-slate-300 dark:border-slate-700 hover:border-cyan-400 dark:hover:border-cyan-500 bg-slate-50/50 dark:bg-slate-800/40'
-            }`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".cfg,.txt,.json,.conf,.text"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            <div className="flex flex-col items-center justify-center gap-1.5">
-              <div className="w-8 h-8 rounded-full bg-cyan-500/10 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
-                <Upload className="w-4 h-4" />
-              </div>
-              <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                {fileName ? (
-                  <span className="text-cyan-600 dark:text-cyan-400 flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5" />
-                    {fileName} ({(fileSize / 1024).toFixed(1)} KB)
-                  </span>
-                ) : (
-                  t('dragDropFile')
-                )}
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                {t('dragDropSub')}
-              </p>
-            </div>
-          </div>
-
-          {/* View Mode Toggle: Script Editor vs Visual Diff */}
-          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setActiveTab('editor')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                  activeTab === 'editor'
-                    ? 'bg-cyan-600 text-white shadow-xs'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+            {/* Live validation feedback */}
+            {validation.status !== 'idle' && (
+              <div
+                className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                  validation.status === 'valid'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                    : validation.status === 'warning'
+                    ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+                    : 'bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-300'
                 }`}
               >
-                <Code2 className="w-3.5 h-3.5" />
-                <span>{t('configEditor')}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('diff')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                  activeTab === 'diff'
-                    ? 'bg-cyan-600 text-white shadow-xs'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
-                }`}
-              >
-                <Split className="w-3.5 h-3.5" />
-                <span>{t('compareDiff')}</span>
-                {(addedCount > 0 || removedCount > 0) && (
-                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-50 dark:bg-slate-900 text-cyan-700 dark:text-cyan-300 font-mono">
-                    +{addedCount} / -{removedCount}
+                <div className="flex items-center gap-2 font-semibold">
+                  {validation.status === 'valid' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                  ) : validation.status === 'warning' ? (
+                    <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-rose-500" />
+                  )}
+                  <span>
+                    {validation.status === 'valid'
+                      ? t('syntaxValid')
+                      : validation.status === 'warning'
+                      ? t('syntaxWarning')
+                      : t('syntaxError')}
                   </span>
-                )}
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => runSyntaxValidation(configContent)}
-                className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium border border-slate-200 dark:border-slate-700 flex items-center gap-1.5"
-              >
-                <ShieldAlert className="w-3.5 h-3.5 text-cyan-500" />
-                <span>{t('syntaxValidation')}</span>
-              </button>
-              <span className="text-[11px] text-slate-400 font-mono">
-                {totalLines} lines • {totalChars} chars
-              </span>
-            </div>
-          </div>
-
-          {/* Validation Status Feedback Banner */}
-          {validationResult.status !== 'idle' && (
-            <div
-              className={`p-3 rounded-xl border text-xs space-y-1.5 ${
-                validationResult.status === 'valid'
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
-                  : validationResult.status === 'warning'
-                  ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300'
-                  : 'bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-300'
-              }`}
-            >
-              <div className="flex items-center gap-2 font-semibold">
-                {validationResult.status === 'valid' ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                ) : validationResult.status === 'warning' ? (
-                  <AlertTriangle className="w-4 h-4 text-amber-500" />
-                ) : (
-                  <XCircle className="w-4 h-4 text-rose-500" />
-                )}
-                <span>
-                  {validationResult.status === 'valid'
-                    ? t('syntaxValid')
-                    : validationResult.status === 'warning'
-                    ? t('syntaxWarning')
-                    : t('syntaxError')}
-                </span>
-              </div>
-              <ul className="list-disc list-inside space-y-0.5 text-[11px] pl-1 font-mono">
-                {validationResult.messages.map((m, idx) => (
-                  <li key={idx}>
-                    {m.line && <span className="font-bold underline mr-1">Line {m.line}:</span>}
-                    {m.text}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Content Area: Tab 1 = Editor */}
-          {activeTab === 'editor' && (
-            <div className="relative rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-50 dark:bg-slate-950 shadow-inner">
-              <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                <span>CLI Terminal Running-Config Editor</span>
-                <span>Encoding: UTF-8 (Unix LF)</span>
-              </div>
-              <div className="flex">
-                {/* Line Numbers */}
-                <div className="w-10 py-3 bg-slate-50 dark:bg-slate-900/60 text-slate-400 dark:text-slate-600 font-mono text-xs select-none text-right pr-2 space-y-0.5 border-r border-slate-200 dark:border-slate-800">
-                  {Array.from({ length: Math.max(1, totalLines) }).map((_, i) => (
-                    <div key={i} className="leading-5">
-                      {i + 1}
-                    </div>
-                  ))}
                 </div>
-                {/* Textarea */}
-                <textarea
-                  value={configContent}
-                  onChange={e => {
-                    setConfigContent(e.target.value);
-                    if (validationResult.status !== 'idle') {
-                      runSyntaxValidation(e.target.value);
-                    }
-                  }}
-                  rows={13}
-                  spellCheck={false}
-                  placeholder="! Paste startup-config or running-config commands here..."
-                  className="flex-1 bg-transparent text-emerald-600 dark:text-emerald-400 font-mono text-xs p-3 focus:outline-none leading-5 resize-none selection:bg-cyan-200 dark:selection:bg-cyan-800/60"
-                ></textarea>
-              </div>
-            </div>
-          )}
-
-          {/* Content Area: Tab 2 = Visual Diff */}
-          {activeTab === 'diff' && (
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-50 dark:bg-slate-950 font-mono text-xs">
-              <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[11px]">
-                <span className="text-slate-700 dark:text-slate-300 font-semibold">{t('diffModeTitle')}</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">+{addedCount} additions</span>
-                  <span className="text-rose-600 dark:text-rose-400 font-medium">-{removedCount} removals</span>
-                </div>
-              </div>
-              <div className="max-h-[300px] overflow-y-auto p-2 space-y-0.5">
-                {diffLines.length === 0 ? (
-                  <div className="text-slate-500 text-center py-8">
-                    No configuration differences detected. New config is identical to running config.
-                  </div>
-                ) : (
-                  diffLines.map((line, idx) => (
-                    <div
-                      key={idx}
-                      className={`flex items-start px-2 py-0.5 rounded leading-5 ${
-                        line.type === 'added'
-                          ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-l-2 border-emerald-500'
-                          : line.type === 'removed'
-                          ? 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-l-2 border-rose-500'
-                          : 'text-slate-500 dark:text-slate-400'
-                      }`}
-                    >
-                      <span className="w-8 select-none text-slate-400 dark:text-slate-600 text-[10px] text-right pr-2">
-                        {line.lineNum || ''}
-                      </span>
-                      <span className="w-4 select-none font-bold">
-                        {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-                      </span>
-                      <span className="flex-1 whitespace-pre-wrap">{line.content}</span>
-                    </div>
-                  ))
+                {validation.status !== 'valid' && (
+                  <ul className="list-disc list-inside space-y-0.5 text-[11px] pl-1">
+                    {validation.messages
+                      .filter(m => m.type !== 'info')
+                      .map((m, idx) => (
+                        <li key={idx}>
+                          {m.line && <span className="font-semibold mr-1">{t('cfgLine')} {m.line}:</span>}
+                          {m.text}
+                        </li>
+                      ))}
+                  </ul>
                 )}
               </div>
-            </div>
-          )}
+            )}
+          </section>
 
-          {/* Deployment Strategy & Options */}
-          <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-xl border border-slate-200 dark:border-slate-700/80 space-y-3">
-            <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5 text-cyan-500" />
-              <span>{t('deploymentMode')}</span>
-            </h4>
-
+          {/* Step 3: Deployment Strategy */}
+          <section className="space-y-2">
+            <StepLabel step={3}>{t('cfgStepApply')}</StepLabel>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <label
-                className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-all ${
+                className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
                   deploymentMode === 'merge'
                     ? 'border-cyan-500 bg-cyan-50 dark:bg-cyan-950/30'
-                    : 'border-slate-200 dark:border-slate-700'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
                 }`}
               >
                 <input
@@ -809,20 +664,16 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
                   className="mt-0.5 text-cyan-600 focus:ring-cyan-500"
                 />
                 <div>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">
-                    {t('modeMerge')}
-                  </span>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    Preserves current interfaces and VLANs, updating only configured statements.
-                  </p>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">{t('modeMerge')}</span>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{t('modeMergeDesc')}</p>
                 </div>
               </label>
 
               <label
-                className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-all ${
+                className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
                   deploymentMode === 'replace'
                     ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/30'
-                    : 'border-slate-200 dark:border-slate-700'
+                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
                 }`}
               >
                 <input
@@ -833,71 +684,61 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
                   className="mt-0.5 text-rose-600 focus:ring-rose-500"
                 />
                 <div>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">
-                    {t('modeReplace')}
-                  </span>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    Wipes running configuration and completely overrides with new script.
-                  </p>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">{t('modeReplace')}</span>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{t('modeReplaceDesc')}</p>
                 </div>
               </label>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-200 dark:border-slate-700 text-xs">
-              <label className="flex items-center gap-2 cursor-pointer select-none text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={enableRollback}
-                  onChange={e => setEnableRollback(e.target.checked)}
-                  className="rounded text-cyan-500 focus:ring-cyan-500"
-                />
-                <span className="flex items-center gap-1.5 font-medium">
-                  <Clock className="w-3.5 h-3.5 text-cyan-500" />
-                  {t('commitConfirmed')}
-                </span>
-              </label>
-
-              <span className="text-[11px] text-slate-400 font-mono">
-                Auto-Backup: Pre-Deploy snapshot will be taken before commit
-              </span>
-            </div>
-          </div>
+            <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-700 dark:text-slate-300 px-1 pt-1">
+              <input
+                type="checkbox"
+                checked={enableRollback}
+                onChange={e => setEnableRollback(e.target.checked)}
+                className="rounded text-cyan-500 focus:ring-cyan-500"
+              />
+              <Clock className="w-3.5 h-3.5 text-cyan-500" />
+              {t('commitConfirmed')}
+            </label>
+            <p className="text-[11px] text-slate-400 px-1">{t('cfgAutoBackup')}</p>
+          </section>
         </div>
 
         {/* Footer Actions */}
-        <div className="px-6 py-3.5 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
-          <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
-            <span>Operator:</span>
-            <span className="font-semibold text-slate-800 dark:text-slate-200">
-              {currentUser?.name || 'Admin Root'} ({currentUser?.role || 'Admin'})
-            </span>
+        <div className="px-6 py-3.5 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+            {t('cfgSummary')}:{' '}
+            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">+{addedCount}</span>{' '}
+            <span className="text-rose-600 dark:text-rose-400 font-semibold">-{removedCount}</span>
           </div>
 
           <div className="flex items-center gap-2.5">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 text-slate-700 dark:text-slate-300 font-semibold text-xs transition-colors"
+              className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-xs transition-colors"
             >
               {t('cancel')}
             </button>
 
             <button
               type="button"
-              disabled={isDeploying || isViewer || !configContent.trim()}
+              disabled={!canDeploy}
               onClick={handleDeploy}
-              className={`px-5 py-2 rounded-xl text-white font-semibold text-xs flex items-center gap-2 shadow-md transition-all ${
+              className={`px-5 py-2 rounded-xl text-white font-semibold text-xs flex items-center gap-2 transition-all ${
                 isDeploying
                   ? 'bg-slate-600 cursor-wait'
-                  : isViewer
-                  ? 'bg-slate-400 cursor-not-allowed opacity-50'
-                  : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 shadow-cyan-600/30'
+                  : !canDeploy
+                  ? 'bg-slate-400 dark:bg-slate-700 cursor-not-allowed opacity-60'
+                  : deploymentMode === 'replace'
+                  ? 'bg-rose-600 hover:bg-rose-500'
+                  : 'bg-cyan-600 hover:bg-cyan-500'
               }`}
             >
               {isDeploying ? (
                 <>
                   <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Deploying to {currentDevice?.ip}...</span>
+                  <span>{t('cfgDeploying')}</span>
                 </>
               ) : (
                 <>
