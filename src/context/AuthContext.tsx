@@ -4,7 +4,7 @@ import { User, Role, UserPermissions } from '../types';
 interface AuthContextType {
   currentUser: User | null;
   users: User[];
-  login: (emailOrUser: string, pass: string) => { success: boolean; error?: string };
+  login: (emailOrUser: string, pass: string, remember?: boolean) => { success: boolean; error?: string };
   register: (name: string, email: string, pass: string, department: string) => { success: boolean; error?: string; assignedRole?: Role };
   requestPasswordReset: (email: string) => { success: boolean; otp?: string; error?: string };
   resetPassword: (email: string, otp: string, newPass: string) => { success: boolean; error?: string };
@@ -21,6 +21,8 @@ interface AuthContextType {
   canAccessUsers: boolean;
   canAccessSettings: boolean;
 }
+
+const SESSION_KEY = 'netmonitor_session';
 
 const DEFAULT_ADMIN_PERMISSIONS: UserPermissions = {
   canEditDevices: true,
@@ -106,16 +108,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return INITIAL_USERS;
   });
 
+  // Session lives in sessionStorage (this tab only) unless "Remember me" was ticked, then localStorage.
+  // No session = start at the Login page.
+  const [rememberSession, setRememberSession] = useState<boolean>(
+    () => localStorage.getItem(SESSION_KEY) !== null
+  );
+
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const savedSession = localStorage.getItem('netmonitor_current_user');
-    if (savedSession) {
-      try {
-        return JSON.parse(savedSession);
-      } catch {
-        return users[0];
-      }
+    localStorage.removeItem('netmonitor_current_user'); // legacy auto-login session
+    const savedSession = sessionStorage.getItem(SESSION_KEY) ?? localStorage.getItem(SESSION_KEY);
+    if (!savedSession) return null;
+    try {
+      return JSON.parse(savedSession);
+    } catch {
+      return null;
     }
-    return users[0]; // Default start logged in as Admin for immediate inspection
   });
 
   const [activeOtpData, setActiveOtpData] = useState<{ email: string; otp: string; expiresAt: number } | null>(() => {
@@ -128,14 +135,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [users]);
 
   useEffect(() => {
+    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
     if (currentUser) {
-      localStorage.setItem('netmonitor_current_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('netmonitor_current_user');
+      (rememberSession ? localStorage : sessionStorage).setItem(SESSION_KEY, JSON.stringify(currentUser));
     }
-  }, [currentUser]);
+  }, [currentUser, rememberSession]);
 
-  const login = (emailOrUser: string, pass: string) => {
+  const login = (emailOrUser: string, pass: string, remember: boolean = false) => {
     const found = users.find(
       u => (u.email.toLowerCase() === emailOrUser.toLowerCase() || u.name.toLowerCase() === emailOrUser.toLowerCase()) &&
            u.password === pass
@@ -154,6 +161,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       lastLogin: new Date().toISOString().replace('T', ' ').slice(0, 19),
     };
 
+    setRememberSession(remember);
     setCurrentUser(updatedUser);
     setUsers(prev => prev.map(u => (u.id === updatedUser.id ? updatedUser : u)));
     return { success: true };
@@ -244,7 +252,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     setCurrentUser(null);
-    localStorage.removeItem('netmonitor_current_user');
+    setRememberSession(false);
   };
 
   const switchRole = (role: Role) => {

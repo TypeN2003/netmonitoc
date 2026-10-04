@@ -15,12 +15,12 @@ export const LoginPage: React.FC = () => {
   const [emailOrUser, setEmailOrUser] = useState('admin@netmonitor.internal');
   const [password, setPassword] = useState('admin123');
   const [error, setError] = useState('');
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const res = login(emailOrUser, password);
+    const res = login(emailOrUser, password, rememberMe);
     if (res.success) {
       navigate('/dashboard');
     } else {
@@ -31,7 +31,7 @@ export const LoginPage: React.FC = () => {
   const handleQuickLogin = (role: Role, email: string, pass: string) => {
     setEmailOrUser(email);
     setPassword(pass);
-    const res = login(email, pass);
+    const res = login(email, pass, rememberMe);
     if (res.success) {
       navigate('/dashboard');
     }
