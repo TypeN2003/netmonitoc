@@ -170,9 +170,9 @@ export const UsersPage: React.FC = () => {
                           u.role
                         )} bg-transparent focus:outline-none cursor-pointer disabled:cursor-not-allowed`}
                       >
-                        <option value="Admin" className="bg-slate-900 text-white">Admin</option>
-                        <option value="Engineer" className="bg-slate-900 text-white">Engineer</option>
-                        <option value="Viewer" className="bg-slate-900 text-white">Viewer</option>
+                        <option value="Admin" className="bg-white text-slate-900 dark:bg-slate-900 dark:text-white">Admin</option>
+                        <option value="Engineer" className="bg-white text-slate-900 dark:bg-slate-900 dark:text-white">Engineer</option>
+                        <option value="Viewer" className="bg-white text-slate-900 dark:bg-slate-900 dark:text-white">Viewer</option>
                       </select>
                     </td>
 

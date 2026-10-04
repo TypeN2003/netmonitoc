@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
 import { useNetworkData } from '../context/NetworkDataContext';
 import { useAuth } from '../context/AuthContext';
@@ -25,12 +26,15 @@ import {
   CheckCircle2,
   AlertTriangle,
   Info,
+  Network,
 } from 'lucide-react';
 import { TopologyNode, TopologyLink } from '../types';
 
 export const TopologyPage: React.FC = () => {
   const { t } = useLanguage();
   const {
+    devices,
+    portsByDevice,
     topologyNodes,
     topologyLinks,
     updateTopologyNodePosition,
@@ -38,16 +42,18 @@ export const TopologyPage: React.FC = () => {
     deleteTopologyNode,
     toggleSubtreeCollapse,
     connectTopologyLink,
+    updateTopologyLinkType,
+    deleteTopologyLink,
     saveTopologyLayout,
   } = useNetworkData();
   const { isAdmin, isEngineer, isViewer } = useAuth();
+  const navigate = useNavigate();
 
   const [editMode, setEditMode] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showConnectModal, setShowConnectModal] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
 
   // Dragging state
@@ -55,10 +61,27 @@ export const TopologyPage: React.FC = () => {
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const canvasRef = useRef<HTMLDivElement>(null);
 
-  // Link Connect Form State
-  const [sourceNodeId, setSourceNodeId] = useState('');
-  const [targetNodeId, setTargetNodeId] = useState('');
-  const [linkType, setLinkType] = useState<'fiber_10g' | 'copper_1g' | 'fiber_40g' | 'trunk'>('fiber_10g');
+  // Scrollable viewport: drag empty space to pan
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+
+  // Canvas grows with the nodes (node card is 176px wide) so everything stays reachable by scrolling
+  const CANVAS_MARGIN = 240;
+  const canvasSize = {
+    width: Math.max(1350, ...topologyNodes.map(n => n.x + 176 + CANVAS_MARGIN)),
+    height: Math.max(920, ...topologyNodes.map(n => n.y + 160 + CANVAS_MARGIN)),
+  };
+
+  // Cable linking: drag from a node's handle onto another node, or click the handle then click a node.
+  // 'press' = mouse still held after grabbing the handle, 'click' = released, waiting for a target click.
+  const [linkType, setLinkType] = useState<TopologyLink['linkType']>('fiber_10g');
+  const [linkDraft, setLinkDraft] = useState<{ sourceId: string; x: number; y: number; phase: 'press' | 'click' } | null>(null);
+  const [hoverTargetId, setHoverTargetId] = useState<string | null>(null);
+  const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
+  const [linkNotice, setLinkNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const linkDraftRef = useRef(linkDraft);
+  linkDraftRef.current = linkDraft;
 
   // Add Node Form State
   const [newNode, setNewNode] = useState({
@@ -84,8 +107,8 @@ export const TopologyPage: React.FC = () => {
       const mouseX = (e.clientX - rect.left) / zoomLevel;
       const mouseY = (e.clientY - rect.top) / zoomLevel;
 
-      const newX = Math.max(40, Math.min(1200, Math.round(mouseX - dragOffset.x)));
-      const newY = Math.max(30, Math.min(1000, Math.round(mouseY - dragOffset.y)));
+      const newX = Math.max(10, Math.round(mouseX - dragOffset.x));
+      const newY = Math.max(10, Math.round(mouseY - dragOffset.y));
       updateTopologyNodePosition(draggedNodeId, newX, newY);
     };
 
@@ -102,8 +125,140 @@ export const TopologyPage: React.FC = () => {
     };
   }, [draggedNodeId, dragOffset, zoomLevel, updateTopologyNodePosition]);
 
+  const handleViewportMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0 || linkDraft) return;
+    if ((e.target as HTMLElement).closest('[data-node-id]')) return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+    panStartRef.current = { x: e.clientX, y: e.clientY, scrollLeft: vp.scrollLeft, scrollTop: vp.scrollTop };
+    setIsPanning(true);
+  };
+
+  useEffect(() => {
+    if (!isPanning) return;
+    const handleMove = (e: MouseEvent) => {
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const start = panStartRef.current;
+      vp.scrollLeft = start.scrollLeft - (e.clientX - start.x);
+      vp.scrollTop = start.scrollTop - (e.clientY - start.y);
+    };
+    const handleUp = () => setIsPanning(false);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [isPanning]);
+
+  const toCanvasPoint = (clientX: number, clientY: number) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return { x: (clientX - rect.left) / zoomLevel, y: (clientY - rect.top) / zoomLevel };
+  };
+
+  const nodeIdAt = (clientX: number, clientY: number) =>
+    (document.elementFromPoint(clientX, clientY)?.closest('[data-node-id]') as HTMLElement | null)?.dataset.nodeId ??
+    null;
+
+  const showLinkNotice = (ok: boolean, text: string) => {
+    setLinkNotice({ ok, text });
+    setTimeout(() => setLinkNotice(null), 2500);
+  };
+
+  const cancelLinkDraft = () => {
+    setLinkDraft(null);
+    setHoverTargetId(null);
+  };
+
+  const finishLink = (sourceId: string, targetId: string) => {
+    const ok = connectTopologyLink(sourceId, targetId, linkType);
+    showLinkNotice(ok, ok ? t('linkCreated') : t('linkExists'));
+    cancelLinkDraft();
+  };
+
+  const handleLinkHandleMouseDown = (e: React.MouseEvent, node: TopologyNode) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setSelectedLinkId(null);
+    setLinkDraft({ sourceId: node.id, ...toCanvasPoint(e.clientX, e.clientY), phase: 'press' });
+  };
+
+  // Window-level listeners while a cable is being drawn
+  const isLinking = linkDraft !== null;
+  useEffect(() => {
+    if (!isLinking) return;
+
+    const handleMove = (e: MouseEvent) => {
+      const draft = linkDraftRef.current;
+      if (!draft) return;
+      setLinkDraft({ ...draft, ...toCanvasPoint(e.clientX, e.clientY) });
+      const over = nodeIdAt(e.clientX, e.clientY);
+      setHoverTargetId(over && over !== draft.sourceId ? over : null);
+    };
+
+    const handleUp = (e: MouseEvent) => {
+      const draft = linkDraftRef.current;
+      if (!draft) return;
+      const targetId = nodeIdAt(e.clientX, e.clientY);
+      if (targetId && targetId !== draft.sourceId) {
+        finishLink(draft.sourceId, targetId);
+      } else if (draft.phase === 'press' && targetId === draft.sourceId) {
+        // Released on the source node itself: switch to click-to-pick-target mode
+        setLinkDraft({ ...draft, phase: 'click' });
+      } else {
+        cancelLinkDraft();
+      }
+    };
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') cancelLinkDraft();
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      window.removeEventListener('keydown', handleKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLinking, zoomLevel, linkType, topologyLinks]);
+
+  // Delete / Escape for a selected cable
+  useEffect(() => {
+    if (!selectedLinkId) return;
+    const handleKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        deleteTopologyLink(selectedLinkId);
+        setSelectedLinkId(null);
+      } else if (e.key === 'Escape') {
+        setSelectedLinkId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [selectedLinkId, deleteTopologyLink]);
+
+  const toggleEditMode = () => {
+    setEditMode(prev => !prev);
+    cancelLinkDraft();
+    setSelectedLinkId(null);
+  };
+
   // Handle Drag Start
   const handleMouseDown = (e: React.MouseEvent, node: TopologyNode) => {
+    if (linkDraft) {
+      // Picking a cable target; the window mouseup listener completes the link
+      e.stopPropagation();
+      e.preventDefault();
+      return;
+    }
+    setSelectedLinkId(null);
     if (!canEdit || !editMode) {
       setSelectedNode(node);
       return;
@@ -129,19 +284,17 @@ export const TopologyPage: React.FC = () => {
     setTimeout(() => setSaveSuccessNotice(false), 2500);
   };
 
-  const handleConnectLink = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) {
-      alert('Please select two distinct nodes to connect.');
-      return;
-    }
-    connectTopologyLink(sourceNodeId, targetNodeId, linkType);
-    setShowConnectModal(false);
-  };
-
   const handleCreateNode = (e: React.FormEvent) => {
     e.preventDefault();
-    addTopologyNode(newNode);
+    // Drop the new node in the middle of what is currently visible
+    const vp = viewportRef.current;
+    const position = vp
+      ? {
+          x: Math.max(10, Math.round((vp.scrollLeft + vp.clientWidth / 2) / zoomLevel - 88)),
+          y: Math.max(10, Math.round((vp.scrollTop + vp.clientHeight / 2) / zoomLevel - 35)),
+        }
+      : {};
+    addTopologyNode({ ...newNode, ...position });
     setShowAddModal(false);
     setNewNode({
       label: '',
@@ -158,25 +311,40 @@ export const TopologyPage: React.FC = () => {
   const getNodeIcon = (type: TopologyNode['type']) => {
     switch (type) {
       case 'wan':
-        return <Cloud className="w-5 h-5 text-blue-400" />;
+        return <Cloud className="w-5 h-5 text-blue-600 dark:text-blue-400" />;
       case 'firewall':
-        return <Shield className="w-5 h-5 text-emerald-400" />;
+        return <Shield className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />;
       case 'core_switch':
-        return <Server className="w-5 h-5 text-cyan-400" />;
+        return <Server className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />;
       case 'dist_switch':
-        return <Layers className="w-5 h-5 text-purple-400" />;
+        return <Layers className="w-5 h-5 text-purple-600 dark:text-purple-400" />;
       case 'edge_ap':
-        return <Wifi className="w-5 h-5 text-amber-400" />;
+        return <Wifi className="w-5 h-5 text-amber-600 dark:text-amber-400" />;
       case 'host_group':
-        return <Users className="w-5 h-5 text-slate-300" />;
+        return <Users className="w-5 h-5 text-slate-500 dark:text-slate-300" />;
       case 'server':
-        return <Server className="w-5 h-5 text-rose-400" />;
+        return <Server className="w-5 h-5 text-rose-600 dark:text-rose-400" />;
       default:
-        return <Server className="w-5 h-5 text-cyan-400" />;
+        return <Server className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />;
     }
   };
 
+  const cableTypes: { value: TopologyLink['linkType']; label: string; color: string }[] = [
+    { value: 'fiber_40g', label: '40G Fiber', color: '#06b6d4' },
+    { value: 'fiber_10g', label: '10G Fiber', color: '#0ea5e9' },
+    { value: 'copper_1g', label: '1G Copper', color: '#3b82f6' },
+    { value: 'trunk', label: 'Trunk', color: '#a855f7' },
+  ];
+  const getLinkColor = (link: Pick<TopologyLink, 'linkType'> & { status?: TopologyLink['status'] }) =>
+    link.status === 'degraded'
+      ? '#f59e0b'
+      : cableTypes.find(c => c.value === link.linkType)?.color ?? '#3b82f6';
+
+  const nodeCenter = (node: TopologyNode) => ({ x: node.x + 80, y: node.y + 35 });
+
   const getNodeBorder = (node: TopologyNode) => {
+    if (hoverTargetId === node.id) return 'ring-4 ring-emerald-400 border-emerald-500 shadow-lg';
+    if (linkDraft?.sourceId === node.id) return 'ring-2 ring-cyan-500 border-cyan-500';
     const isSearched =
       searchQuery &&
       (node.label.toLowerCase().includes(searchQuery.toLowerCase()) || node.ip.includes(searchQuery));
@@ -184,7 +352,7 @@ export const TopologyPage: React.FC = () => {
     if (selectedNode?.id === node.id) return 'ring-2 ring-cyan-500 shadow-md';
     if (node.status === 'warning') return 'border-amber-500';
     if (node.status === 'offline') return 'border-rose-500';
-    return 'border-slate-700 hover:border-cyan-500';
+    return 'border-slate-200 dark:border-slate-700 hover:border-cyan-500';
   };
 
   return (
@@ -197,7 +365,7 @@ export const TopologyPage: React.FC = () => {
             {t('interactiveTopology')}
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Hierarchical 5-Tier layout with collapsible client subtrees (Architecture scalable to 200–300 nodes)
+            Drag empty space to pan · Scroll to explore · Collapsible client subtrees
           </p>
         </div>
 
@@ -247,7 +415,7 @@ export const TopologyPage: React.FC = () => {
           {canEdit && (
             <>
               <button
-                onClick={() => setEditMode(!editMode)}
+                onClick={toggleEditMode}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all ${
                   editMode
                     ? 'bg-amber-600 text-white shadow-xs'
@@ -268,13 +436,27 @@ export const TopologyPage: React.FC = () => {
                     <span>{t('addNode')}</span>
                   </button>
 
-                  <button
-                    onClick={() => setShowConnectModal(true)}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-all"
+                  {/* Cable type used for newly drawn links */}
+                  <div
+                    className="flex items-center gap-0.5 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 p-0.5"
+                    title={t('cableType')}
                   >
-                    <LinkIcon className="w-3.5 h-3.5" />
-                    <span>{t('connectCable')}</span>
-                  </button>
+                    <LinkIcon className="w-3.5 h-3.5 mx-1.5 text-slate-400" />
+                    {cableTypes.map(c => (
+                      <button
+                        key={c.value}
+                        onClick={() => setLinkType(c.value)}
+                        className={`flex items-center gap-1 px-2 py-1 rounded-md font-semibold transition-colors ${
+                          linkType === c.value
+                            ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white'
+                            : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <span className="w-2.5 h-0.5 rounded-full" style={{ backgroundColor: c.color }}></span>
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
 
                   <button
                     onClick={handleSave}
@@ -292,43 +474,59 @@ export const TopologyPage: React.FC = () => {
 
       {/* Save Layout Success Banner */}
       {saveSuccessNotice && (
-        <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800 text-emerald-300 text-xs flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+        <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
           <span>{t('layoutSaved')}</span>
         </div>
       )}
 
-      {/* Main Canvas Viewport */}
-      <div className="bg-slate-950 rounded-2xl border border-slate-800 shadow-2xl overflow-hidden relative min-h-[720px] select-none">
-        {/* Tier Backdrop Grid Lines */}
-        <div className="absolute inset-0 pointer-events-none flex flex-col justify-between py-6 px-4 opacity-25">
-          <div className="border-b border-dashed border-slate-700 pb-1 text-[10px] font-mono text-slate-500">
-            TIER 1: WAN / BGP EXTERNAL TRANSIT
-          </div>
-          <div className="border-b border-dashed border-slate-700 pb-1 text-[10px] font-mono text-slate-500">
-            TIER 2: PERIMETER NGFW & SECURITY CLUSTER
-          </div>
-          <div className="border-b border-dashed border-slate-700 pb-1 text-[10px] font-mono text-slate-500">
-            TIER 3: CORE L3 100G SWITCHING BACKBONE
-          </div>
-          <div className="border-b border-dashed border-slate-700 pb-1 text-[10px] font-mono text-slate-500">
-            TIER 4: DISTRIBUTION & SERVER AGGREGATION LAYER
-          </div>
-          <div className="pb-1 text-[10px] font-mono text-slate-500">
-            TIER 5: EDGE ACCESS APs & COLLAPSIBLE HOST SUBTREES (200+ NODES)
-          </div>
+      {/* Cable linking hint / result */}
+      {editMode && canEdit && (
+        <div
+          className={`px-3 py-2 rounded-lg border text-xs flex items-center gap-2 ${
+            linkNotice
+              ? linkNotice.ok
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300'
+              : 'bg-cyan-50 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-900 text-cyan-800 dark:text-cyan-300'
+          }`}
+        >
+          {linkNotice ? (
+            linkNotice.ok ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />
+          ) : (
+            <Info className="w-4 h-4 shrink-0" />
+          )}
+          <span>
+            {linkNotice ? linkNotice.text : linkDraft?.phase === 'click' ? t('linkPickTarget') : t('linkHint')}
+          </span>
         </div>
+      )}
 
+      {/* Main Canvas Viewport */}
+      <div
+        ref={viewportRef}
+        onMouseDown={handleViewportMouseDown}
+        className={`bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm dark:shadow-2xl overflow-auto relative h-[75vh] min-h-[480px] select-none ${
+          isPanning ? 'cursor-grabbing' : 'cursor-grab'
+        }`}
+        style={{
+          backgroundImage: 'radial-gradient(circle, rgb(148 163 184 / 0.35) 1px, transparent 1px)',
+          backgroundSize: `${24 * zoomLevel}px ${24 * zoomLevel}px`,
+        }}
+      >
+        {/* Sizer: gives the scaled canvas its real scrollable footprint */}
+        <div style={{ width: canvasSize.width * zoomLevel, height: canvasSize.height * zoomLevel }} className="relative">
         {/* Scaled Interactive Canvas Area */}
         <div
           ref={canvasRef}
           style={{
             transform: `scale(${zoomLevel})`,
             transformOrigin: 'top left',
-            width: '1350px',
-            height: '920px',
+            width: `${canvasSize.width}px`,
+            height: `${canvasSize.height}px`,
           }}
-          className="relative"
+          className="absolute top-0 left-0"
+          onMouseDown={() => setSelectedLinkId(null)}
         >
           {/* Render SVG Topology Links */}
           <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
@@ -338,40 +536,121 @@ export const TopologyPage: React.FC = () => {
               if (!sourceNode || !targetNode) return null;
 
               const isDegraded = link.status === 'degraded';
-              const strokeColor = isDegraded
-                ? '#f59e0b'
-                : link.linkType.includes('fiber')
-                ? '#06b6d4'
-                : '#3b82f6';
+              const isSelected = selectedLinkId === link.id;
+              const a = nodeCenter(sourceNode);
+              const b = nodeCenter(targetNode);
+              const baseWidth = link.linkType === 'fiber_40g' ? 3 : 2;
 
               return (
                 <g key={link.id}>
                   <line
-                    x1={sourceNode.x + 80}
-                    y1={sourceNode.y + 35}
-                    x2={targetNode.x + 80}
-                    y2={targetNode.y + 35}
-                    stroke={strokeColor}
-                    strokeWidth={link.linkType === 'fiber_40g' ? 3 : 2}
+                    x1={a.x}
+                    y1={a.y}
+                    x2={b.x}
+                    y2={b.y}
+                    stroke={getLinkColor(link)}
+                    strokeWidth={isSelected ? baseWidth + 3 : baseWidth}
                     strokeDasharray={isDegraded ? '5,5' : 'none'}
-                    opacity={0.7}
+                    opacity={isSelected ? 1 : 0.7}
                   />
+                  {/* Wide invisible hit area so cables are easy to click in edit mode */}
+                  {editMode && canEdit && !linkDraft && (
+                    <line
+                      x1={a.x}
+                      y1={a.y}
+                      x2={b.x}
+                      y2={b.y}
+                      stroke="transparent"
+                      strokeWidth={14}
+                      style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                      onMouseDown={e => {
+                        e.stopPropagation();
+                        setSelectedLinkId(link.id);
+                      }}
+                    />
+                  )}
                   {/* Speed Badge along link midpoint */}
                   <text
-                    x={(sourceNode.x + targetNode.x) / 2 + 80}
-                    y={(sourceNode.y + targetNode.y) / 2 + 30}
-                    fill="#94a3b8"
+                    x={(a.x + b.x) / 2}
+                    y={(a.y + b.y) / 2 - 5}
+                    className="fill-slate-500 dark:fill-slate-400"
                     fontSize="9"
                     fontFamily="monospace"
                     textAnchor="middle"
-                    className="bg-slate-900"
                   >
                     {link.speed}
                   </text>
                 </g>
               );
             })}
+
+            {/* Cable being drawn */}
+            {linkDraft &&
+              (() => {
+                const source = topologyNodes.find(n => n.id === linkDraft.sourceId);
+                if (!source) return null;
+                const a = nodeCenter(source);
+                const hoverNode = topologyNodes.find(n => n.id === hoverTargetId);
+                const b = hoverNode ? nodeCenter(hoverNode) : linkDraft;
+                return (
+                  <line
+                    x1={a.x}
+                    y1={a.y}
+                    x2={b.x}
+                    y2={b.y}
+                    stroke={getLinkColor({ linkType })}
+                    strokeWidth={3}
+                    strokeDasharray="6,4"
+                    strokeLinecap="round"
+                  />
+                );
+              })()}
           </svg>
+
+          {/* Selected cable actions */}
+          {editMode &&
+            canEdit &&
+            selectedLinkId &&
+            (() => {
+              const link = topologyLinks.find(l => l.id === selectedLinkId);
+              const s = link && topologyNodes.find(n => n.id === link.source);
+              const d = link && topologyNodes.find(n => n.id === link.target);
+              if (!link || !s || !d) return null;
+              const a = nodeCenter(s);
+              const b = nodeCenter(d);
+              return (
+                <div
+                  onMouseDown={e => e.stopPropagation()}
+                  style={{ left: `${(a.x + b.x) / 2}px`, top: `${(a.y + b.y) / 2 + 10}px` }}
+                  className="absolute -translate-x-1/2 z-30 flex items-center gap-0.5 p-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-lg text-[11px]"
+                >
+                  {cableTypes.map(c => (
+                    <button
+                      key={c.value}
+                      onClick={() => updateTopologyLinkType(link.id, c.value)}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md font-semibold whitespace-nowrap ${
+                        link.linkType === c.value
+                          ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white'
+                          : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <span className="w-2.5 h-0.5 rounded-full" style={{ backgroundColor: c.color }}></span>
+                      {c.label}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => {
+                      deleteTopologyLink(link.id);
+                      setSelectedLinkId(null);
+                    }}
+                    title={t('deleteLink')}
+                    className="ml-0.5 p-1.5 rounded-md text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border-l border-slate-200 dark:border-slate-700"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })()}
 
           {/* Render Topology Nodes */}
           {topologyNodes.map(node => {
@@ -379,24 +658,25 @@ export const TopologyPage: React.FC = () => {
             return (
               <div
                 key={node.id}
+                data-node-id={node.id}
                 onMouseDown={e => handleMouseDown(e, node)}
                 style={{
                   left: `${node.x}px`,
                   top: `${node.y}px`,
-                  cursor: editMode && canEdit ? 'grab' : 'pointer',
+                  cursor: linkDraft ? 'crosshair' : editMode && canEdit ? 'grab' : 'pointer',
                 }}
-                className={`absolute w-44 rounded-xl bg-slate-900/95 border p-2.5 transition-shadow z-10 ${getNodeBorder(
+                className={`absolute w-44 rounded-xl bg-white/95 dark:bg-slate-900/95 border p-2.5 shadow-xs transition-shadow z-10 ${getNodeBorder(
                   node
                 )}`}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="p-1 rounded-md bg-slate-800">{getNodeIcon(node.type)}</div>
+                    <div className="p-1 rounded-md bg-slate-100 dark:bg-slate-800">{getNodeIcon(node.type)}</div>
                     <div className="min-w-0">
-                      <div className="font-semibold text-xs text-white truncate max-w-[100px]" title={node.label}>
+                      <div className="font-semibold text-xs text-slate-900 dark:text-white truncate max-w-[100px]" title={node.label}>
                         {node.label}
                       </div>
-                      <div className="text-[10px] text-cyan-400 font-mono">{node.ip}</div>
+                      <div className="text-[10px] text-cyan-600 dark:text-cyan-400 font-mono">{node.ip}</div>
                     </div>
                   </div>
                   <span
@@ -412,15 +692,15 @@ export const TopologyPage: React.FC = () => {
 
                 {/* Collapsible Subtree for Scalability (200-300 devices handling) */}
                 {isGroup && (
-                  <div className="mt-2 pt-2 border-t border-slate-800 text-[10px]">
+                  <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-800 text-[10px]">
                     <button
                       onClick={e => {
                         e.stopPropagation();
                         toggleSubtreeCollapse(node.id);
                       }}
-                      className="w-full flex items-center justify-between text-slate-300 hover:text-white font-mono"
+                      className="w-full flex items-center justify-between text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white font-mono"
                     >
-                      <span className="font-bold text-cyan-400">+{node.groupCount} Nodes</span>
+                      <span className="font-bold text-cyan-600 dark:text-cyan-400">+{node.groupCount} Nodes</span>
                       {node.isCollapsed ? (
                         <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
                       ) : (
@@ -429,7 +709,7 @@ export const TopologyPage: React.FC = () => {
                     </button>
 
                     {!node.isCollapsed && node.subClients && (
-                      <div className="mt-1.5 space-y-1 text-[9px] text-slate-400 bg-slate-950 p-1.5 rounded">
+                      <div className="mt-1.5 space-y-1 text-[9px] text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-950 p-1.5 rounded">
                         {node.subClients.map((sub, i) => (
                           <div key={i} className="truncate">
                             • {sub}
@@ -437,6 +717,18 @@ export const TopologyPage: React.FC = () => {
                         ))}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Cable connector handle: drag onto another node, or click then click a node */}
+                {editMode && canEdit && (
+                  <div
+                    onMouseDown={e => handleLinkHandleMouseDown(e, node)}
+                    title={t('connectCable')}
+                    className="absolute left-1/2 -bottom-2.5 -translate-x-1/2 w-5 h-5 rounded-full bg-white dark:bg-slate-900 border-2 flex items-center justify-center cursor-crosshair shadow-sm hover:scale-125 transition-transform"
+                    style={{ borderColor: getLinkColor({ linkType }) }}
+                  >
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: getLinkColor({ linkType }) }}></span>
                   </div>
                 )}
 
@@ -458,10 +750,14 @@ export const TopologyPage: React.FC = () => {
             );
           })}
         </div>
+        </div>
       </div>
 
       {/* Selected Node Details Card */}
-      {selectedNode && (
+      {selectedNode && (() => {
+        // Topology labels differ from inventory names, so match the switch by management IP
+        const portSwitch = devices.find(d => d.ip === selectedNode.ip && portsByDevice[d.id]?.length);
+        return (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800">
@@ -470,18 +766,36 @@ export const TopologyPage: React.FC = () => {
             <div>
               <div className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
                 <span>{selectedNode.label}</span>
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">
-                  Tier {selectedNode.tier}
-                </span>
               </div>
               <div className="text-slate-500 font-mono mt-0.5">
-                IP: {selectedNode.ip} · Status: <span className="text-emerald-500 font-semibold">{selectedNode.status.toUpperCase()}</span>
+                IP: {selectedNode.ip} · Status:{' '}
+                <span
+                  className={`font-semibold ${
+                    selectedNode.status === 'online'
+                      ? 'text-emerald-500'
+                      : selectedNode.status === 'warning'
+                      ? 'text-amber-500'
+                      : 'text-rose-500'
+                  }`}
+                >
+                  {selectedNode.status.toUpperCase()}
+                </span>
                 {selectedNode.model && ` · Model: ${selectedNode.model}`}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {portSwitch && (
+              <button
+                onClick={() => navigate(`/ports?device=${encodeURIComponent(portSwitch.id)}`)}
+                title={`${portSwitch.name} (${portSwitch.ip})`}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold transition-colors"
+              >
+                <Network className="w-3.5 h-3.5" />
+                <span>{t('viewSwitchPorts')}</span>
+              </button>
+            )}
             <button
               onClick={() => setSelectedNode(null)}
               className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold"
@@ -490,7 +804,8 @@ export const TopologyPage: React.FC = () => {
             </button>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Modal: Add Node */}
       {showAddModal && (
@@ -536,17 +851,19 @@ export const TopologyPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">Tier Level</label>
+                  <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">Device Type</label>
                   <select
-                    value={newNode.tier}
-                    onChange={e => setNewNode({ ...newNode, tier: (parseInt(e.target.value) || 4) as 1 | 2 | 3 | 4 | 5 })}
+                    value={newNode.type}
+                    onChange={e => setNewNode({ ...newNode, type: e.target.value as TopologyNode['type'] })}
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white focus:outline-none"
                   >
-                    <option value={1}>Tier 1 (WAN)</option>
-                    <option value={2}>Tier 2 (Firewall)</option>
-                    <option value={3}>Tier 3 (Core)</option>
-                    <option value={4}>Tier 4 (Distribution)</option>
-                    <option value={5}>Tier 5 (Edge Access)</option>
+                    <option value="wan">WAN / Internet</option>
+                    <option value="firewall">Firewall</option>
+                    <option value="core_switch">Core Switch</option>
+                    <option value="dist_switch">Distribution Switch</option>
+                    <option value="edge_ap">Edge Switch / AP</option>
+                    <option value="server">Server</option>
+                    <option value="host_group">Host Group</option>
                   </select>
                 </div>
               </div>
@@ -564,92 +881,6 @@ export const TopologyPage: React.FC = () => {
                   className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold"
                 >
                   {t('save')}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Connect Cable */}
-      {showConnectModal && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-200 dark:border-slate-800">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <LinkIcon className="w-5 h-5 text-purple-500" />
-                {t('connectCable')}
-              </h3>
-              <button
-                onClick={() => setShowConnectModal(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleConnectLink} className="space-y-3.5 text-xs">
-              <div>
-                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">Source Node</label>
-                <select
-                  value={sourceNodeId}
-                  onChange={e => setSourceNodeId(e.target.value)}
-                  required
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white focus:outline-none"
-                >
-                  <option value="">Select Origin Node...</option>
-                  {topologyNodes.map(n => (
-                    <option key={n.id} value={n.id}>
-                      {n.label} ({n.ip})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">Destination Node</label>
-                <select
-                  value={targetNodeId}
-                  onChange={e => setTargetNodeId(e.target.value)}
-                  required
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white focus:outline-none"
-                >
-                  <option value="">Select Target Node...</option>
-                  {topologyNodes.map(n => (
-                    <option key={n.id} value={n.id}>
-                      {n.label} ({n.ip})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('cableType')}</label>
-                <select
-                  value={linkType}
-                  onChange={e => setLinkType(e.target.value as any)}
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white focus:outline-none font-mono"
-                >
-                  <option value="fiber_40g">40 Gbps QSFP+ Fiber Backbone</option>
-                  <option value="fiber_10g">10 Gbps SFP+ Fiber Optic</option>
-                  <option value="copper_1g">1 Gbps Cat6 Copper Twisted Pair</option>
-                  <option value="trunk">802.1Q Inter-Switch Trunk</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowConnectModal(false)}
-                  className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold"
-                >
-                  {t('cancel')}
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold"
-                >
-                  Connect Link
                 </button>
               </div>
             </form>

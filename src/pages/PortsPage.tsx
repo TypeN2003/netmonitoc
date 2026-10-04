@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
 import { useNetworkData } from '../context/NetworkDataContext';
 import { useAuth } from '../context/AuthContext';
@@ -23,10 +24,30 @@ export const PortsPage: React.FC = () => {
   const { isAdmin, isEngineer, isViewer } = useAuth();
 
   const switchDevices = devices.filter(d => d.type.includes('Switch'));
+  // ?device=<id> preselects a switch (e.g. when arriving from the Topology map)
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedDeviceId = searchParams.get('device');
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
-    switchDevices.length > 0 ? switchDevices[0].id : 'dev-core-01'
+    requestedDeviceId && switchDevices.some(d => d.id === requestedDeviceId)
+      ? requestedDeviceId
+      : switchDevices.length > 0
+      ? switchDevices[0].id
+      : 'dev-core-01'
   );
   const [selectedPort, setSelectedPort] = useState<PortInfo | null>(null);
+
+  useEffect(() => {
+    if (requestedDeviceId && switchDevices.some(d => d.id === requestedDeviceId)) {
+      setSelectedDeviceId(requestedDeviceId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedDeviceId]);
+
+  const handleSelectDevice = (id: string) => {
+    setSelectedDeviceId(id);
+    setSelectedPort(null);
+    setSearchParams({ device: id }, { replace: true });
+  };
 
   const currentPorts = portsByDevice[selectedDeviceId] || [];
   const currentDevice = devices.find(d => d.id === selectedDeviceId);
@@ -35,17 +56,72 @@ export const PortsPage: React.FC = () => {
   const oddPorts = currentPorts.filter(p => p.id % 2 !== 0);
   const evenPorts = currentPorts.filter(p => p.id % 2 === 0);
 
-  const getPortBgColor = (port: PortInfo) => {
-    if (!port.adminUp || port.status === 'down') {
-      return 'bg-slate-300 dark:bg-slate-700/60 border-slate-400 dark:border-slate-600 text-slate-500';
-    }
-    if (port.status === 'warning') {
-      return 'bg-amber-500/20 border-amber-500 text-amber-500 hover:bg-amber-500/30';
-    }
-    if (port.portType === 'SFP+') {
-      return 'bg-purple-500/20 border-purple-500 text-purple-400 hover:bg-purple-500/30';
-    }
-    return 'bg-emerald-500/20 border-emerald-500 text-emerald-400 hover:bg-emerald-500/30';
+  type PortState = 'up' | 'down' | 'warning' | 'sfp';
+  const getPortState = (port: PortInfo): PortState => {
+    if (!port.adminUp || port.status === 'down') return 'down';
+    if (port.status === 'warning') return 'warning';
+    if (port.portType === 'SFP+') return 'sfp';
+    return 'up';
+  };
+
+  // Solid fills so link state reads at a glance; down ports are hollow with a dashed outline
+  const portStyles: Record<PortState, { cell: string; notch: string }> = {
+    up: {
+      cell: 'bg-emerald-500 dark:bg-emerald-600 border-emerald-600 dark:border-emerald-500 text-white hover:bg-emerald-600 dark:hover:bg-emerald-500',
+      notch: 'bg-emerald-800/40',
+    },
+    sfp: {
+      cell: 'bg-purple-500 dark:bg-purple-600 border-purple-600 dark:border-purple-500 text-white hover:bg-purple-600 dark:hover:bg-purple-500',
+      notch: 'bg-purple-900/40',
+    },
+    warning: {
+      cell: 'bg-amber-400 dark:bg-amber-500 border-amber-500 dark:border-amber-400 text-amber-950 hover:bg-amber-500 dark:hover:bg-amber-400',
+      notch: 'bg-amber-900/30',
+    },
+    down: {
+      cell: 'bg-white dark:bg-slate-800/70 border-dashed border-slate-300 dark:border-slate-600 text-slate-400 dark:text-slate-500 hover:border-slate-400 dark:hover:border-slate-500',
+      notch: 'bg-slate-200 dark:bg-slate-700',
+    },
+  };
+
+  const portCounts = currentPorts.reduce(
+    (acc, p) => ({ ...acc, [getPortState(p)]: acc[getPortState(p)] + 1 }),
+    { up: 0, down: 0, warning: 0, sfp: 0 } as Record<PortState, number>
+  );
+
+  const renderPort = (port: PortInfo, row: 'top' | 'bottom') => {
+    const style = portStyles[getPortState(port)];
+    const notch = (
+      <div className={`w-5 h-2 ${style.notch} ${row === 'top' ? 'rounded-b-sm' : 'rounded-t-sm'}`}></div>
+    );
+    const label = <span className="text-xs font-mono font-bold leading-none">{port.id}</span>;
+    const vlan = <span className="text-[10px] font-mono leading-none opacity-80">V{port.vlan}</span>;
+    return (
+      <button
+        key={port.id}
+        onClick={() => setSelectedPort(port)}
+        title={`Port ${port.name} · ${port.status.toUpperCase()} · VLAN ${port.vlan}`}
+        className={`h-14 min-w-0 rounded-md border-2 flex flex-col items-center justify-between py-1 transition-colors ${style.cell} ${
+          selectedPort?.id === port.id
+            ? 'ring-2 ring-offset-2 ring-cyan-500 ring-offset-slate-50 dark:ring-offset-slate-950'
+            : ''
+        }`}
+      >
+        {row === 'top' ? (
+          <>
+            {label}
+            {notch}
+            {vlan}
+          </>
+        ) : (
+          <>
+            {vlan}
+            {notch}
+            {label}
+          </>
+        )}
+      </button>
+    );
   };
 
   const getPortIndicatorColor = (port: PortInfo) => {
@@ -76,7 +152,7 @@ export const PortsPage: React.FC = () => {
           </span>
           <select
             value={selectedDeviceId}
-            onChange={e => setSelectedDeviceId(e.target.value)}
+            onChange={e => handleSelectDevice(e.target.value)}
             className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 text-xs rounded-lg px-3 py-2 font-medium focus:outline-none focus:ring-1 focus:ring-cyan-500"
           >
             {switchDevices.map(sw => (
@@ -89,97 +165,76 @@ export const PortsPage: React.FC = () => {
       </div>
 
       {/* Switch Faceplate Container */}
-      <div className="bg-slate-900 text-slate-100 rounded-2xl border border-slate-800 p-6 shadow-2xl relative overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm dark:shadow-2xl relative overflow-hidden">
         {/* Chassis Branding Header */}
-        <div className="flex items-center justify-between pb-4 mb-6 border-b border-slate-800">
+        <div className="flex items-center justify-between pb-4 mb-6 border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 rounded-full bg-emerald-500 shadow-md shadow-emerald-500/50 animate-pulse"></div>
             <div>
-              <div className="text-sm font-bold tracking-wider uppercase font-mono text-white flex items-center gap-2">
+              <div className="text-sm font-bold tracking-wider uppercase font-mono text-slate-900 dark:text-white flex items-center gap-2">
                 <span>{currentDevice?.vendor}</span>
-                <span className="text-cyan-400">{currentDevice?.model}</span>
+                <span className="text-cyan-600 dark:text-cyan-400">{currentDevice?.model}</span>
               </div>
-              <div className="text-[11px] text-slate-400 font-mono">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                 Hostname: {currentDevice?.name} · IP: {currentDevice?.ip} · Ports: {currentPorts.length}
               </div>
             </div>
           </div>
 
           {/* Faceplate Port Status Legend */}
-          <div className="hidden md:flex items-center gap-4 text-xs font-mono">
-            <div className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-              <span className="text-slate-300">{t('portUp')}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
-              <span className="text-slate-400">{t('portDown')}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-              <span className="text-amber-400">{t('portWarning')}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-purple-500"></span>
-              <span className="text-purple-400">10G SFP+</span>
-            </div>
+          <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+            {(
+              [
+                ['up', t('portUp'), 'bg-emerald-500 border-emerald-600'],
+                ['down', t('portDown'), 'bg-white dark:bg-slate-800 border-dashed border-slate-400 dark:border-slate-500'],
+                ['warning', t('portWarning'), 'bg-amber-400 border-amber-500'],
+                ['sfp', '10G SFP+', 'bg-purple-500 border-purple-600'],
+              ] as [PortState, string, string][]
+            ).map(([state, label, swatch]) => (
+              <div
+                key={state}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700"
+              >
+                <span className={`w-3.5 h-3.5 rounded border-2 ${swatch}`}></span>
+                <span className="font-medium text-slate-700 dark:text-slate-200">{label}</span>
+                <span className="font-mono font-bold text-slate-900 dark:text-white">{portCounts[state]}</span>
+              </div>
+            ))}
           </div>
         </div>
 
         {/* Physical Port Faceplate Matrix Grid (Dual Row) */}
         {currentPorts.length === 0 ? (
-          <div className="py-12 text-center text-slate-400 font-mono text-xs">
+          <div className="py-12 text-center text-slate-500 dark:text-slate-400 font-mono text-xs">
             No interface port matrix provisioned for this device. Please select a Cisco or Aruba Switch.
           </div>
         ) : (
-          <div className="overflow-x-auto pb-4">
-            <div className="min-w-[840px] bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-inner">
+          <div className="overflow-x-auto pb-2">
+            {/* Columns stretch to fill the width; below ~2.5rem per port the panel scrolls instead */}
+            <div
+              className="bg-slate-100 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2"
+              style={{ minWidth: `${Math.max(oddPorts.length, evenPorts.length) * 2.5}rem` }}
+            >
               {/* Top Row: Odd Ports (1, 3, 5...) */}
-              <div className="grid grid-flow-col auto-cols-max gap-2 mb-2">
-                {oddPorts.map(port => (
-                  <button
-                    key={port.id}
-                    onClick={() => setSelectedPort(port)}
-                    className={`w-10 h-12 rounded border flex flex-col items-center justify-between p-1 transition-all transform hover:scale-105 ${getPortBgColor(
-                      port
-                    )} ${selectedPort?.id === port.id ? 'ring-2 ring-cyan-400' : ''}`}
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span className={`w-1.5 h-1.5 rounded-full ${getPortIndicatorColor(port)}`}></span>
-                      <span className="text-[9px] font-mono font-bold">{port.id}</span>
-                    </div>
-                    {/* RJ45 clip notch graphic */}
-                    <div className="w-4 h-2 bg-slate-800 rounded-b-xs border-t border-slate-700"></div>
-                    <div className="text-[8px] font-mono opacity-80">{port.vlan}</div>
-                  </button>
-                ))}
+              <div
+                className="grid gap-1.5"
+                style={{ gridTemplateColumns: `repeat(${Math.max(oddPorts.length, 1)}, minmax(0, 1fr))` }}
+              >
+                {oddPorts.map(port => renderPort(port, 'top'))}
               </div>
 
               {/* Bottom Row: Even Ports (2, 4, 6...) */}
-              <div className="grid grid-flow-col auto-cols-max gap-2">
-                {evenPorts.map(port => (
-                  <button
-                    key={port.id}
-                    onClick={() => setSelectedPort(port)}
-                    className={`w-10 h-12 rounded border flex flex-col items-center justify-between p-1 transition-all transform hover:scale-105 ${getPortBgColor(
-                      port
-                    )} ${selectedPort?.id === port.id ? 'ring-2 ring-cyan-400' : ''}`}
-                  >
-                    {/* RJ45 clip notch top */}
-                    <div className="w-4 h-2 bg-slate-800 rounded-t-xs border-b border-slate-700"></div>
-                    <div className="text-[8px] font-mono opacity-80">{port.vlan}</div>
-                    <div className="flex items-center justify-between w-full">
-                      <span className={`w-1.5 h-1.5 rounded-full ${getPortIndicatorColor(port)}`}></span>
-                      <span className="text-[9px] font-mono font-bold">{port.id}</span>
-                    </div>
-                  </button>
-                ))}
+              <div
+                className="grid gap-1.5"
+                style={{ gridTemplateColumns: `repeat(${Math.max(evenPorts.length, 1)}, minmax(0, 1fr))` }}
+              >
+                {evenPorts.map(port => renderPort(port, 'bottom'))}
               </div>
             </div>
           </div>
         )}
 
-        <div className="mt-2 text-right text-[11px] text-slate-400 font-mono">
+        <div className="mt-2 text-right text-[11px] text-slate-500 dark:text-slate-400 font-mono">
           Click any port icon to inspect real-time interface telemetry, VLAN tag, duplex, and connected MAC.
         </div>
       </div>

@@ -153,6 +153,12 @@ const translations: Record<Language, Record<string, string>> = {
     expandSubtree: 'ขยายกลุ่มโหนด',
     hostsSubtreeCount: 'อุปกรณ์ลูกข่ายภายในกลุ่ม',
     cableType: 'ประเภทสายลิงก์',
+    linkHint: 'ลากจากจุด ● ใต้อุปกรณ์ไปวางบนอุปกรณ์อื่นเพื่อเชื่อมสาย · คลิกที่สายเพื่อเปลี่ยนประเภทหรือลบ',
+    linkPickTarget: 'คลิกอุปกรณ์ปลายทางเพื่อเชื่อมสาย (กด Esc เพื่อยกเลิก)',
+    linkCreated: 'เชื่อมสายลิงก์เรียบร้อยแล้ว',
+    linkExists: 'อุปกรณ์สองตัวนี้เชื่อมกันอยู่แล้ว',
+    deleteLink: 'ลบสาย',
+    viewSwitchPorts: 'ดูพอร์ตสวิตช์',
 
     // Alerts
     alarmIncidentDeck: 'เดสก์แจ้งเตือนเหตุการณ์และภัยคุกคามในระบบ',
@@ -421,6 +427,12 @@ const translations: Record<Language, Record<string, string>> = {
     expandSubtree: 'Expand Group',
     hostsSubtreeCount: 'Host Nodes Inside Group',
     cableType: 'Link Medium',
+    linkHint: 'Drag from the ● handle under a node onto another node to connect · Click a cable to change its type or delete it',
+    linkPickTarget: 'Click the destination node to connect (press Esc to cancel)',
+    linkCreated: 'Cable link connected',
+    linkExists: 'These two nodes are already linked',
+    deleteLink: 'Delete link',
+    viewSwitchPorts: 'View Switch Ports',
 
     // Alerts
     alarmIncidentDeck: 'System Alarm & Incident Monitoring Deck',

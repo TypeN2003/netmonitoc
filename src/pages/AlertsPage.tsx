@@ -324,8 +324,8 @@ export const AlertsPage: React.FC = () => {
                     <span>{noteError}</span>
                   </div>
                 )}
-                <span className="text-[11px] text-slate-400 mt-1 block">
-                  Author: <strong className="text-slate-300">{currentUser?.name}</strong> ({currentUser?.role})
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
+                  Author: <strong className="text-slate-700 dark:text-slate-300">{currentUser?.name}</strong> ({currentUser?.role})
                 </span>
               </div>
 
