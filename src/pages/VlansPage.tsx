@@ -38,6 +38,15 @@ export const VlansPage: React.FC = () => {
 
   const handleCreateVlan = (e: React.FormEvent) => {
     e.preventDefault();
+    // 802.1Q VLAN IDs are 1-4094, and each ID can exist only once
+    if (newVlan.id < 1 || newVlan.id > 4094) {
+      alert('VLAN ID must be between 1 and 4094');
+      return;
+    }
+    if (vlans.some(v => v.id === newVlan.id)) {
+      alert(`VLAN ${newVlan.id} already exists`);
+      return;
+    }
     addVlan(newVlan);
     setShowAddModal(false);
   };

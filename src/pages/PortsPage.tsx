@@ -348,7 +348,11 @@ export const PortsPage: React.FC = () => {
 
             {/* Admin Toggle State Action */}
             <div className="mt-5 pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              {isAdmin || isEngineer ? (
+              {currentDevice?.status === 'offline' ? (
+                <div className="text-center w-full text-rose-500 text-xs italic">
+                  {currentDevice.name} is offline (unreachable). Port changes cannot be pushed until it responds again.
+                </div>
+              ) : isAdmin || isEngineer ? (
                 <button
                   onClick={() => {
                     togglePortState(selectedDeviceId, selectedPort.id);

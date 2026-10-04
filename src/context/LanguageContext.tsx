@@ -318,13 +318,24 @@ const translations: Record<Language, Record<string, string>> = {
     statusOnline: 'ออนไลน์ (Online)',
     statusWarning: 'แจ้งเตือน (Warning)',
     statusOffline: 'ออฟไลน์ (Offline)',
-    connectedAps: 'Access Point ที่เชื่อมต่อ',
-    apClientsConnected: 'อุปกรณ์ผู้ใช้เชื่อมต่ออยู่',
 
     // Devices search & filter
     locationFilter: 'สถานที่',
     allLocations: 'ทุกสถานที่',
     trafficInOut: 'Traffic เข้า / ออก',
+
+    // Alerts page
+    alertsSubtitle: 'ติดตามเหตุการณ์ผิดปกติแบบเรียลไทม์ พร้อมบันทึกการตรวจสอบและประวัติการดำเนินการ',
+    alertsSearchPlaceholder: 'ค้นหาเหตุการณ์ อุปกรณ์ IP หรือบันทึก...',
+    alertStatusLabel: 'สถานะ',
+    alertStatusAll: 'ทุกสถานะ',
+    alertStatusActive: 'รอดำเนินการ',
+    alertStatusAcknowledged: 'รับทราบแล้ว',
+    alertStatusResolved: 'แก้ไขแล้ว',
+    alertsEmpty: 'ไม่พบเหตุการณ์ที่ตรงกับตัวกรอง',
+    alertDeviceLabel: 'อุปกรณ์',
+    alertAckByLabel: 'รับทราบโดย',
+    alertAuthorLabel: 'ผู้บันทึก',
 
     // In-app notifications
     appNotifTitle: 'แจ้งเตือนใหม่',
@@ -639,13 +650,24 @@ const translations: Record<Language, Record<string, string>> = {
     statusOnline: 'Online',
     statusWarning: 'Warning',
     statusOffline: 'Offline',
-    connectedAps: 'Connected Access Points',
-    apClientsConnected: 'client devices connected',
 
     // Devices search & filter
     locationFilter: 'Location',
     allLocations: 'All locations',
     trafficInOut: 'Traffic In / Out',
+
+    // Alerts page
+    alertsSubtitle: 'Real-time incident response deck with role-based diagnostic note filing & historical audit trail',
+    alertsSearchPlaceholder: 'Search incident, device, IP or note...',
+    alertStatusLabel: 'Status',
+    alertStatusAll: 'All States',
+    alertStatusActive: 'Active Incidents',
+    alertStatusAcknowledged: 'Acknowledged',
+    alertStatusResolved: 'Resolved',
+    alertsEmpty: 'No incident alarms found matching selected filters.',
+    alertDeviceLabel: 'Device',
+    alertAckByLabel: 'Ack by',
+    alertAuthorLabel: 'Author',
 
     // In-app notifications
     appNotifTitle: 'New alert',

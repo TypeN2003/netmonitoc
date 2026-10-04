@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
-import { useNetworkData } from '../context/NetworkDataContext';
+import { useNetworkData, alertText } from '../context/NetworkDataContext';
 import { useAuth } from '../context/AuthContext';
 import {
   Server,
@@ -16,7 +16,6 @@ import {
   Layers,
   CheckCircle2,
   XCircle,
-  Wifi,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -33,8 +32,8 @@ import {
 import { CPU_THRESHOLD, RAM_THRESHOLD } from '../context/NetworkDataContext';
 
 export const DashboardPage: React.FC = () => {
-  const { t } = useLanguage();
-  const { devices, accessPoints, alerts, vlans, refreshTelemetry, isTelemetrySyncing } = useNetworkData();
+  const { t, lang } = useLanguage();
+  const { devices, alerts, vlans, refreshTelemetry, isTelemetrySyncing, lastSyncAt } = useNetworkData();
   const { currentUser, isViewer } = useAuth();
   const navigate = useNavigate();
 
@@ -44,8 +43,6 @@ export const DashboardPage: React.FC = () => {
   const offlineDevices = devices.filter(d => d.status === 'offline').length;
   const highCpuDevices = devices.filter(d => d.cpu >= CPU_THRESHOLD).length;
   const highRamDevices = devices.filter(d => d.ram >= RAM_THRESHOLD).length;
-  const onlineAps = accessPoints.filter(ap => ap.status !== 'offline').length;
-  const totalApClients = accessPoints.reduce((sum, ap) => sum + ap.connectedClients, 0);
   const activeCriticalAlerts = alerts.filter(a => a.severity === 'critical' && a.status === 'active');
 
   // Realistic telemetry data points (Gbps)
@@ -91,7 +88,7 @@ export const DashboardPage: React.FC = () => {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>{t('lastSyncTime')}: 17:10:00 UTC</span>
+            <span>{t('lastSyncTime')}: {lastSyncAt.slice(11)}</span>
           </div>
 
           <button
@@ -105,8 +102,8 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Top Metric Cards: device counts by status + access points */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+      {/* Top Metric Cards: device counts by status */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Total Devices */}
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
@@ -149,23 +146,6 @@ export const DashboardPage: React.FC = () => {
           </div>
           <div className="text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 tabular-nums">{offlineDevices}</div>
           <div className="mt-1 text-[11px] text-slate-500 font-mono">ICMP unreachable</div>
-        </div>
-
-        {/* Access Points */}
-        <div
-          onClick={() => navigate('/access-points')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs cursor-pointer hover:border-cyan-400 transition-colors"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-[11px] font-medium uppercase tracking-wider">{t('connectedAps')}</span>
-            <Wifi className="w-4 h-4 text-purple-500" />
-          </div>
-          <div className="text-2xl font-bold font-mono text-purple-600 dark:text-purple-400 tabular-nums">
-            {onlineAps} <span className="text-xs font-normal text-slate-400">/ {accessPoints.length}</span>
-          </div>
-          <div className="mt-1 text-[11px] text-slate-500 font-mono">
-            {totalApClients} {t('apClientsConnected')}
-          </div>
         </div>
       </div>
 
@@ -245,7 +225,7 @@ export const DashboardPage: React.FC = () => {
             <div className="space-y-2.5 text-xs">
               <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50">
                 <span className="text-slate-600 dark:text-slate-300">SNMP Probe Status</span>
-                <span className="font-mono text-emerald-600 dark:text-emerald-400 font-semibold">148 / 148 Responding</span>
+                <span className={`font-mono font-semibold ${offlineDevices > 0 ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>{totalDevices - offlineDevices} / {totalDevices} Responding</span>
               </div>
               <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50">
                 <span className="text-slate-600 dark:text-slate-300">Core BGP Peering</span>
@@ -388,7 +368,7 @@ export const DashboardPage: React.FC = () => {
                   </div>
                   <span className="text-[10px] text-slate-400 font-mono">{alert.timestamp.slice(11)}</span>
                 </div>
-                <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2">{alert.message}</p>
+                <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2">{alertText(alert, lang).message}</p>
                 {alert.notes.length > 0 && (
                   <div className="mt-1.5 pt-1.5 border-t border-slate-200 dark:border-slate-800 text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
                     <span>Note:</span>

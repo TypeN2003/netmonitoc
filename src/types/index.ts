@@ -174,6 +174,8 @@ export interface IncidentAlert {
   severity: 'critical' | 'warning' | 'info';
   category: string;
   message: string;
+  categoryTh?: string;
+  messageTh?: string;
   status: 'active' | 'acknowledged' | 'resolved';
   acknowledgedBy?: string;
   acknowledgedAt?: string;

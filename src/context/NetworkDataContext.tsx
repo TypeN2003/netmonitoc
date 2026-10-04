@@ -64,6 +64,7 @@ interface NetworkDataContextType {
   updateSettings: (newSettings: Partial<SystemSettings>) => void;
   refreshTelemetry: () => void;
   isTelemetrySyncing: boolean;
+  lastSyncAt: string;
 }
 
 const INITIAL_DEVICES: NetworkDevice[] = [
@@ -223,6 +224,106 @@ const INITIAL_DEVICES: NetworkDevice[] = [
     snmpCommunity: 'public_ro',
   },
 ];
+
+// Demo: one unreachable distribution switch, plus the alert and syslog entry it would have raised
+const OFFLINE_DEMO_DEVICE: NetworkDevice = {
+  id: 'dev-dist-03',
+  name: 'Dist-SW-Library',
+  ip: '10.10.0.4',
+  mac: '00:1A:2B:3C:4D:08',
+  type: 'Distribution Switch',
+  vendor: 'Cisco Systems',
+  model: 'Catalyst 9300-24P',
+  location: 'Building D - Library IDF',
+  rack: 'IDF-D1 (Unit 10)',
+  status: 'offline',
+  uptime: 'Offline',
+  cpu: 0,
+  ram: 0,
+  temp: 0,
+  portsTotal: 24,
+  portsUp: 0,
+  pingMs: 0,
+  trafficInMbps: 0,
+  trafficOutMbps: 0,
+  lastSeen: '2026-09-28 15:42:10',
+  firmware: 'Cisco IOS-XE 17.09.04',
+  snmpCommunity: 'public_ro',
+};
+
+const OFFLINE_DEMO_ALERT: IncidentAlert = {
+  id: 'alt-offline-dist-03',
+  timestamp: '2026-09-28 15:42:10',
+  deviceName: OFFLINE_DEMO_DEVICE.name,
+  deviceIp: OFFLINE_DEMO_DEVICE.ip,
+  severity: 'critical',
+  category: 'Device Unreachable',
+  message: 'Device stopped responding to ICMP ping and SNMP polling (3 consecutive timeouts). Uplink to Core-L3-SW-01 is down.',
+  status: 'active',
+  notes: [],
+};
+
+const OFFLINE_DEMO_LOG: SyslogEntry = {
+  id: 'log-offline-dist-03',
+  timestamp: '2026-09-28 15:42:10',
+  facility: 'SYSTEM',
+  severity: 'Critical',
+  host: OFFLINE_DEMO_DEVICE.name,
+  ip: OFFLINE_DEMO_DEVICE.ip,
+  tag: '%NETMON-2-UNREACHABLE',
+  message: 'ICMP/SNMP poll timeout x3 — device marked OFFLINE',
+};
+
+// The offline switch on the topology map, in the distribution row with a dead uplink from the core
+const OFFLINE_DEMO_NODE: TopologyNode = {
+  id: 'node-dist-library',
+  label: 'Dist-SW-Library (Building D)',
+  ip: '10.10.0.4',
+  tier: 4,
+  type: 'dist_switch',
+  status: 'offline',
+  x: 1100,
+  y: 460,
+  model: 'Catalyst 9300-24P',
+};
+
+const OFFLINE_DEMO_LINK: TopologyLink = {
+  id: 'link-core-dist-library',
+  source: 'node-core-sw',
+  target: OFFLINE_DEMO_NODE.id,
+  speed: '10 Gbps (DOWN)',
+  linkType: 'fiber_10g',
+  status: 'down',
+};
+
+// The demo switch is always present on load, even in data saved before it existed.
+// An earlier version of the demo used an access-layer edge switch; those records are dropped.
+const LEGACY_DEMO_IDS = new Set([
+  'dev-edge-02',
+  'alt-offline-edge-02',
+  'log-offline-edge-02',
+  'node-edge-sw-library',
+  'link-dist-west-library',
+]);
+const REMOVED_ACCESS_NODE_IDS = new Set(['node-edge-sw-lab', 'node-ap-east', 'node-ap-west']);
+
+// The distribution row was re-centred under the core switch. Saved layouts still at the old
+// default x are moved; a node someone dragged elsewhere keeps its position.
+const RECENTRED_DIST_X: Record<string, [number, number]> = {
+  'node-dist-east': [300, 140],
+  'node-dist-west': [620, 460],
+  'node-srv-cluster': [940, 780],
+  'node-dist-library': [1260, 1100],
+};
+const recentreDistRow = (n: TopologyNode): TopologyNode => {
+  const move = RECENTRED_DIST_X[n.id];
+  return move && n.x === move[0] && n.y === 460 ? { ...n, x: move[1] } : n;
+};
+
+const withDemoItem =<T extends { id: string }>(list: T[], item: T): T[] => {
+  const kept = list.filter(x => !LEGACY_DEMO_IDS.has(x.id));
+  return kept.some(x => x.id === item.id) ? kept : [...kept, item];
+};
 
 const INITIAL_VLANS: VlanInfo[] = [
   { id: 10, name: 'MGMT-Infrastructure', subnet: '10.10.10.0/24', gateway: '10.10.10.1', activePorts: 32, dhcpTotal: 254, dhcpUsed: 48, trafficRateMbps: 240, status: 'active', description: 'Network switch & router management out-of-band' },
@@ -430,17 +531,9 @@ const INITIAL_TOPOLOGY_NODES: TopologyNode[] = [
   { id: 'node-core-sw', label: 'Core-L3-SW-01 (Catalyst 9500)', ip: '10.10.0.1', tier: 3, type: 'core_switch', status: 'online', x: 620, y: 310, model: '48Y4C 100G Core' },
 
   // Tier 4: Distribution Layer
-  { id: 'node-dist-east', label: 'Dist-SW-East (Building B)', ip: '10.10.0.2', tier: 4, type: 'dist_switch', status: 'online', x: 300, y: 460, model: 'Catalyst 9300-48UXM' },
-  { id: 'node-dist-west', label: 'Dist-SW-West (Building C)', ip: '10.10.0.3', tier: 4, type: 'dist_switch', status: 'warning', x: 620, y: 460, model: 'Catalyst 9300-48P' },
-  { id: 'node-srv-cluster', label: 'Core Server Farm (SAN / Hyper-V)', ip: '10.10.100.10', tier: 4, type: 'server', status: 'online', x: 940, y: 460, model: 'PowerEdge R750 Cluster' },
-
-  // Tier 5: Edge Layer (APs)
-  { id: 'node-edge-sw-lab', label: 'Edge-SW-CompLab-01', ip: '10.10.10.15', tier: 5, type: 'edge_ap', status: 'online', x: 160, y: 640, model: 'Aruba CX 6200F' },
-
-  { id: 'node-ap-east', label: 'AP Cluster East (Eng Labs)', ip: '10.10.10.53', tier: 5, type: 'edge_ap', status: 'online', x: 380, y: 640, model: 'Aruba AP-635 Cluster' },
-
-  { id: 'node-ap-west', label: 'AP Cluster West (Auditorium & Admin)', ip: '10.10.10.55', tier: 5, type: 'edge_ap', status: 'warning', x: 620, y: 640, model: 'Ruckus R850 Array' },
-
+  { id: 'node-dist-east', label: 'Dist-SW-East (Building B)', ip: '10.10.0.2', tier: 4, type: 'dist_switch', status: 'online', x: 140, y: 460, model: 'Catalyst 9300-48UXM' },
+  { id: 'node-dist-west', label: 'Dist-SW-West (Building C)', ip: '10.10.0.3', tier: 4, type: 'dist_switch', status: 'warning', x: 460, y: 460, model: 'Catalyst 9300-48P' },
+  { id: 'node-srv-cluster', label: 'Core Server Farm (SAN / Hyper-V)', ip: '10.10.100.10', tier: 4, type: 'server', status: 'online', x: 780, y: 460, model: 'PowerEdge R750 Cluster' },
 ];
 
 const INITIAL_TOPOLOGY_LINKS: TopologyLink[] = [
@@ -449,10 +542,43 @@ const INITIAL_TOPOLOGY_LINKS: TopologyLink[] = [
   { id: 'link-core-dist-east', source: 'node-core-sw', target: 'node-dist-east', speed: '10 Gbps LACP', linkType: 'fiber_10g', status: 'up' },
   { id: 'link-core-dist-west', source: 'node-core-sw', target: 'node-dist-west', speed: '10 Gbps LACP', linkType: 'fiber_10g', status: 'degraded' },
   { id: 'link-core-srv', source: 'node-core-sw', target: 'node-srv-cluster', speed: '40 Gbps DAC', linkType: 'fiber_40g', status: 'up' },
-  { id: 'link-dist-east-labsw', source: 'node-dist-east', target: 'node-edge-sw-lab', speed: '10 Gbps SFP+', linkType: 'fiber_10g', status: 'up' },
-  { id: 'link-dist-east-ap', source: 'node-dist-east', target: 'node-ap-east', speed: '2.5 Gbps mGig PoE+', linkType: 'copper_1g', status: 'up' },
-  { id: 'link-dist-west-ap', source: 'node-dist-west', target: 'node-ap-west', speed: '2.5 Gbps mGig PoE+', linkType: 'copper_1g', status: 'degraded' },
 ];
+
+// Thai text for the built-in alerts, keyed by alert id (also fills alerts saved before Thai existed)
+const ALERT_TH: Record<string, { categoryTh: string; messageTh: string }> = {
+  'alt-01': {
+    categoryTh: 'ทรัพยากรเครื่องใช้งานสูงเกินเกณฑ์',
+    messageTh:
+      'CPU ใช้งานเกิน 89% และอุณหภูมิภายในตัวเครื่องสูงถึง 54°C (เกณฑ์ 50°C) ตรวจพบแพ็กเก็ตถูกดรอปจาก ARP Inspection จำนวนมาก',
+  },
+  'alt-02': {
+    categoryTh: 'ช่องสัญญาณหนาแน่นและส่งซ้ำสูง',
+    messageTh:
+      'อัตราการส่งเฟรมซ้ำ (Retry) สูงถึง 8.5% มีผู้ใช้เชื่อมต่อพร้อมกัน 115 เครื่อง ช่องสัญญาณ 44 (5GHz) ถูกใช้งานเกิน 82%',
+  },
+  'alt-03': {
+    categoryTh: 'กำลังแสงของพอร์ตไฟเบอร์ต่ำ',
+    messageTh:
+      'กำลังรับแสง (RX Power) ของโมดูล SFP+ พอร์ต Te1/1/2 ลดลงเหลือ -18.2 dBm ใกล้ถึงเกณฑ์ขั้นต่ำ -20 dBm',
+  },
+  'alt-04': {
+    categoryTh: 'ระบบป้องกันการบุกรุก (IPS) ทำงาน',
+    messageTh: 'IPS บล็อกการสแกนพอร์ตจากภายนอกไปยัง WAN IP 203.158.0.1 จากต้นทาง 45.142.214.88',
+  },
+  'alt-offline-dist-03': {
+    categoryTh: 'อุปกรณ์ขาดการติดต่อ',
+    messageTh:
+      'อุปกรณ์ไม่ตอบสนองต่อ ICMP Ping และ SNMP Polling (หมดเวลา 3 ครั้งติดต่อกัน) ลิงก์ไปยัง Core-L3-SW-01 ขาด',
+  },
+};
+
+const withAlertTh = (a: IncidentAlert): IncidentAlert => ({ ...a, ...(ALERT_TH[a.id] ?? {}) });
+
+// Category and message in the viewer's language (falls back to English)
+export const alertText = (a: IncidentAlert, lang: 'th' | 'en') => ({
+  category: lang === 'th' ? a.categoryTh ?? a.category : a.category,
+  message: lang === 'th' ? a.messageTh ?? a.message : a.message,
+});
 
 const INITIAL_ALERTS: IncidentAlert[] = [
   {
@@ -594,7 +720,16 @@ const withTraffic = (d: NetworkDevice): NetworkDevice => {
 const fluctuate = (value: number, spread: number) =>
   Math.max(0, Math.round(value * (1 + (Math.random() - 0.5) * spread)));
 
-const nowTimestamp = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+// Local wall-clock time (the app runs in Thailand, UTC+7), formatted YYYY-MM-DD HH:mm:ss
+export const nowTimestamp = () => {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+
+// Unique ids even when several records are created in the same millisecond
+let idCounter = 0;
+const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(idCounter++).toString(36)}`;
 
 const generateMockSha256 = (content: string) => {
   let hash = 0;
@@ -875,7 +1010,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [devices, setDevices] = useState<NetworkDevice[]>(() => {
     const saved = localStorage.getItem('netmonitor_devices');
     const list: NetworkDevice[] = saved ? JSON.parse(saved) : INITIAL_DEVICES;
-    return list.map(withTraffic);
+    return withDemoItem(list, OFFLINE_DEMO_DEVICE).map(withTraffic);
   });
 
   const [vlans, setVlans] = useState<VlanInfo[]>(() => {
@@ -890,27 +1025,29 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const [clients] = useState<ClientSession[]>(INITIAL_CLIENTS);
 
-  // Host group nodes were removed from the topology; drop any still present in saved data
+  // Host groups and the access layer were removed from the topology; drop any still present in saved data
   const [topologyNodes, setTopologyNodes] = useState<TopologyNode[]>(() => {
     const saved = localStorage.getItem('netmonitor_topology_nodes');
     const nodes: TopologyNode[] = saved ? JSON.parse(saved) : INITIAL_TOPOLOGY_NODES;
-    return nodes.filter(n => n.type !== 'host_group');
+    return withDemoItem(nodes, OFFLINE_DEMO_NODE)
+      .filter(n => n.type !== 'host_group' && !REMOVED_ACCESS_NODE_IDS.has(n.id))
+      .map(recentreDistRow);
   });
 
   const [topologyLinks, setTopologyLinks] = useState<TopologyLink[]>(() => {
     const saved = localStorage.getItem('netmonitor_topology_links');
-    const links: TopologyLink[] = saved ? JSON.parse(saved) : INITIAL_TOPOLOGY_LINKS;
+    const links: TopologyLink[] = withDemoItem(saved ? JSON.parse(saved) : INITIAL_TOPOLOGY_LINKS, OFFLINE_DEMO_LINK);
     return links.filter(l => topologyNodes.some(n => n.id === l.source) && topologyNodes.some(n => n.id === l.target));
   });
 
   const [alerts, setAlerts] = useState<IncidentAlert[]>(() => {
     const saved = localStorage.getItem('netmonitor_alerts');
-    return saved ? JSON.parse(saved) : INITIAL_ALERTS;
+    return withDemoItem(saved ? JSON.parse(saved) : INITIAL_ALERTS, OFFLINE_DEMO_ALERT).map(withAlertTh);
   });
 
   const [syslogs, setSyslogs] = useState<SyslogEntry[]>(() => {
     const saved = localStorage.getItem('netmonitor_syslogs');
-    return saved ? JSON.parse(saved) : INITIAL_SYSLOGS;
+    return withDemoItem(saved ? JSON.parse(saved) : INITIAL_SYSLOGS, OFFLINE_DEMO_LOG);
   });
 
   const [settings, setSettings] = useState<SystemSettings>(() => {
@@ -931,11 +1068,15 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
       'dev-dist-01': generateSwitchPorts(48),
       'dev-dist-02': generateSwitchPorts(48),
       'dev-edge-01': generateSwitchPorts(48),
+      [OFFLINE_DEMO_DEVICE.id]: generateSwitchPorts(24).map(p => ({ ...p, status: 'down' as const })),
     };
-    return initialPorts;
+    // Saved port states (admin up/down toggles) win over the generated defaults
+    const saved = localStorage.getItem('netmonitor_ports');
+    return saved ? { ...initialPorts, ...JSON.parse(saved) } : initialPorts;
   });
 
   const [isTelemetrySyncing, setIsTelemetrySyncing] = useState<boolean>(false);
+  const [lastSyncAt, setLastSyncAt] = useState<string>(() => nowTimestamp());
 
   // Persistence effects
   useEffect(() => {
@@ -953,6 +1094,22 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
   useEffect(() => {
     localStorage.setItem('netmonitor_backups', JSON.stringify(backups));
   }, [backups]);
+
+  useEffect(() => {
+    localStorage.setItem('netmonitor_syslogs', JSON.stringify(syslogs));
+  }, [syslogs]);
+
+  useEffect(() => {
+    localStorage.setItem('netmonitor_vlans', JSON.stringify(vlans));
+  }, [vlans]);
+
+  useEffect(() => {
+    localStorage.setItem('netmonitor_aps', JSON.stringify(accessPoints));
+  }, [accessPoints]);
+
+  useEffect(() => {
+    localStorage.setItem('netmonitor_ports', JSON.stringify(portsByDevice));
+  }, [portsByDevice]);
 
   const addDevice = (deviceData: Omit<NetworkDevice, 'id' | 'uptime' | 'lastSeen'>) => {
     const newDevice: NetworkDevice = withTraffic({
@@ -978,6 +1135,10 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const deleteDevice = (id: string) => {
     setDevices(prev => prev.filter(d => d.id !== id));
+    setPortsByDevice(prev => {
+      const { [id]: _removed, ...rest } = prev;
+      return rest;
+    });
   };
 
   const importDeviceConfig = (
@@ -1006,7 +1167,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
       deviceIp: target.ip,
       deviceType: target.type,
       versionTag: `Pre-Deploy (${new Date().toLocaleTimeString('en-US', { hour12: false })})`,
-      timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      timestamp: nowTimestamp(),
       sizeKb: parseFloat(((target.config || '').length / 1024).toFixed(1)) || 10.0,
       checksumSha256: generateMockSha256((target.config || '') + target.id + Date.now()),
       triggeredBy: author,
@@ -1026,9 +1187,9 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
       })
     );
 
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const now = nowTimestamp();
     const newLog: SyslogEntry = {
-      id: `log-${Date.now()}`,
+      id: uid('log'),
       timestamp: now,
       facility: 'SYSTEM',
       severity: 'Notice',
@@ -1067,7 +1228,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
       deviceIp: dev.ip,
       deviceType: dev.type,
       versionTag,
-      timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      timestamp: nowTimestamp(),
       sizeKb: parseFloat((content.length / 1024).toFixed(1)) || 12.4,
       checksumSha256: generateMockSha256(content + Date.now()),
       triggeredBy: author,
@@ -1081,7 +1242,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     // Add syslog entry
     const newLog: SyslogEntry = {
-      id: `log-${Date.now()}`,
+      id: uid('log'),
       timestamp: newBackup.timestamp,
       facility: 'SYSTEM',
       severity: 'Info',
@@ -1108,9 +1269,9 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
       prev.map(d => (d.id === backup.deviceId ? { ...d, config: backup.configContent } : d))
     );
 
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const now = nowTimestamp();
     const newLog: SyslogEntry = {
-      id: `log-${Date.now()}`,
+      id: uid('log'),
       timestamp: now,
       facility: 'SYSTEM',
       severity: 'Notice',
@@ -1127,7 +1288,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
     onProgress?: (percent: number, currentDevice: string) => void
   ) => {
     setIsBackingUp(true);
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const now = nowTimestamp();
     const createdList: ConfigBackup[] = [];
 
     for (let i = 0; i < devices.length; i++) {
@@ -1170,7 +1331,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }));
 
     const newLog: SyslogEntry = {
-      id: `log-${Date.now()}`,
+      id: uid('log'),
       timestamp: now,
       facility: 'SYSTEM',
       severity: 'Notice',
@@ -1310,10 +1471,10 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     const newNote = {
-      id: `note-${Date.now()}`,
+      id: uid('note'),
       author,
       role,
-      timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      timestamp: nowTimestamp(),
       text: trimmedNote,
     };
 
@@ -1334,7 +1495,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     // Also inject into syslogs
     const newLog: SyslogEntry = {
-      id: `log-${Date.now()}`,
+      id: uid('log'),
       timestamp: newNote.timestamp,
       facility: 'SYSTEM',
       severity: 'Notice',
@@ -1375,10 +1536,11 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ...d,
           cpu,
           ram,
-          pingMs: parseFloat((d.pingMs + (Math.random() - 0.5) * 0.3).toFixed(1)),
+          pingMs: Math.max(0.1, parseFloat((d.pingMs + (Math.random() - 0.5) * 0.3).toFixed(1))),
           trafficInMbps: fluctuate(d.trafficInMbps ?? 0, 0.2),
           trafficOutMbps: fluctuate(d.trafficOutMbps ?? 0, 0.2),
-          status: overThreshold ? ('warning' as const) : d.status,
+          // Warning follows the thresholds both ways: back under them, the device is online again
+          status: overThreshold ? ('warning' as const) : ('online' as const),
         };
       });
 
@@ -1407,6 +1569,8 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
           severity: d.cpu >= 95 || d.ram >= 95 ? 'critical' : 'warning',
           category: 'High Resource Exhaustion',
           message: `Resource usage exceeded threshold: ${reasons.join(', ')}.`,
+          categoryTh: 'ทรัพยากรเครื่องใช้งานสูงเกินเกณฑ์',
+          messageTh: `การใช้ทรัพยากรเกินเกณฑ์: ${reasons.join(', ').replace(/threshold/g, 'เกณฑ์')}`,
           status: 'active',
           notes: [],
         });
@@ -1422,7 +1586,17 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
         });
       });
 
-      setDevices(polled);
+      // Merge only the polled metrics, so an edit made during the poll delay is not overwritten
+      const metrics = new Map(polled.map(d => [d.id, d]));
+      setDevices(prev =>
+        prev.map(d => {
+          const m = metrics.get(d.id);
+          if (!m || d.status === 'offline') return d;
+          const { cpu, ram, pingMs, trafficInMbps, trafficOutMbps, status } = m;
+          return { ...d, cpu, ram, pingMs, trafficInMbps, trafficOutMbps, status };
+        })
+      );
+      setLastSyncAt(now);
       if (newAlerts.length > 0) {
         setAlerts(prev => [...newAlerts, ...prev]);
         setSyslogs(prev => [...newLogs, ...prev]);
@@ -1479,6 +1653,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
         updateSettings,
         refreshTelemetry,
         isTelemetrySyncing,
+        lastSyncAt,
       }}
     >
       {children}

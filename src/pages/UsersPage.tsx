@@ -59,7 +59,11 @@ export const UsersPage: React.FC = () => {
 
   const handleCreateUser = (e: React.FormEvent) => {
     e.preventDefault();
-    createUser(newUser);
+    const res = createUser(newUser);
+    if (!res.success) {
+      alert(res.error);
+      return;
+    }
     setShowAddModal(false);
     setNewUser({
       name: '',
@@ -83,12 +87,12 @@ export const UsersPage: React.FC = () => {
   const getRoleBadge = (role: Role) => {
     switch (role) {
       case 'Admin':
-        return 'bg-rose-500/20 text-rose-300 border-rose-500/30';
+        return 'bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-500/20 dark:text-rose-300 dark:border-rose-500/30';
       case 'Engineer':
-        return 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30';
+        return 'bg-cyan-100 text-cyan-700 border-cyan-300 dark:bg-cyan-500/20 dark:text-cyan-300 dark:border-cyan-500/30';
       case 'Viewer':
       default:
-        return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+        return 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/20 dark:text-amber-300 dark:border-amber-500/30';
     }
   };
 
@@ -194,8 +198,12 @@ export const UsersPage: React.FC = () => {
 
                     {/* Status */}
                     <td className="py-3 px-4">
-                      <span className="inline-flex items-center gap-1 text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                      <span
+                        className={`inline-flex items-center gap-1 text-[11px] font-mono font-semibold ${
+                          u.status === 'Active' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${u.status === 'Active' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
                         {u.status}
                       </span>
                     </td>

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../../context/LanguageContext';
-import { useNetworkData } from '../../context/NetworkDataContext';
+import { useNetworkData, alertText } from '../../context/NetworkDataContext';
 import { IncidentAlert } from '../../types';
 import { AlertTriangle, Bell, ShieldAlert, X } from 'lucide-react';
 
@@ -11,7 +11,7 @@ const canUseBrowserNotifications = () => typeof window !== 'undefined' && 'Notif
 
 // In-app notification: pops a toast (and a desktop notification when allowed) for every new active alert
 export const AlertNotifier: React.FC = () => {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { alerts } = useNetworkData();
   const navigate = useNavigate();
 
@@ -30,7 +30,7 @@ export const AlertNotifier: React.FC = () => {
     fresh.forEach(alert => {
       setTimeout(() => setToasts(prev => prev.filter(x => x.id !== alert.id)), TOAST_DURATION_MS);
       if (permission === 'granted') {
-        new Notification(`[${alert.severity.toUpperCase()}] ${alert.deviceName}`, { body: alert.message });
+        new Notification(`[${alert.severity.toUpperCase()}] ${alert.deviceName}`, { body: alertText(alert, lang).message });
       }
     });
   }, [alerts]);
@@ -63,7 +63,7 @@ export const AlertNotifier: React.FC = () => {
               <div className="font-semibold text-slate-900 dark:text-white">
                 {t('appNotifTitle')}: {alert.deviceName}
               </div>
-              <p className="text-slate-600 dark:text-slate-300 mt-0.5 line-clamp-2">{alert.message}</p>
+              <p className="text-slate-600 dark:text-slate-300 mt-0.5 line-clamp-2">{alertText(alert, lang).message}</p>
               <div className="flex items-center gap-3 mt-2">
                 <button
                   onClick={() => {

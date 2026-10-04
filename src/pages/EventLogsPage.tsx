@@ -34,7 +34,8 @@ export const EventLogsPage: React.FC = () => {
           )}"`
       )
       .join('\n');
-    const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+    // BOM so Excel opens the UTF-8 file with Thai text intact
+    const blob = new Blob(['\uFEFF' + header + rows], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
