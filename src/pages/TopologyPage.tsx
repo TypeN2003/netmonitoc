@@ -52,7 +52,11 @@ export const TopologyPage: React.FC = () => {
   const [editMode, setEditMode] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // Looked up live so the details card follows drags and disappears when the node is deleted
+  const selectedNode = topologyNodes.find(n => n.id === selectedNodeId) ?? null;
+  // A node mirrors the status of the inventory device with the same management IP
+  const nodeStatus = (node: TopologyNode) => devices.find(d => d.ip === node.ip)?.status ?? node.status;
   const [showAddModal, setShowAddModal] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
 
@@ -260,12 +264,12 @@ export const TopologyPage: React.FC = () => {
     }
     setSelectedLinkId(null);
     if (!canEdit || !editMode) {
-      setSelectedNode(node);
+      setSelectedNodeId(node.id);
       return;
     }
     e.stopPropagation();
     setDraggedNodeId(node.id);
-    setSelectedNode(node);
+    setSelectedNodeId(node.id);
 
     if (canvasRef.current) {
       const rect = canvasRef.current.getBoundingClientRect();
@@ -336,7 +340,9 @@ export const TopologyPage: React.FC = () => {
     { value: 'trunk', label: 'Trunk', color: '#a855f7' },
   ];
   const getLinkColor = (link: Pick<TopologyLink, 'linkType'> & { status?: TopologyLink['status'] }) =>
-    link.status === 'degraded'
+    link.status === 'down'
+      ? '#f43f5e'
+      : link.status === 'degraded'
       ? '#f59e0b'
       : cableTypes.find(c => c.value === link.linkType)?.color ?? '#3b82f6';
 
@@ -350,8 +356,8 @@ export const TopologyPage: React.FC = () => {
       (node.label.toLowerCase().includes(searchQuery.toLowerCase()) || node.ip.includes(searchQuery));
     if (isSearched) return 'ring-4 ring-cyan-400 shadow-lg shadow-cyan-500/50';
     if (selectedNode?.id === node.id) return 'ring-2 ring-cyan-500 shadow-md';
-    if (node.status === 'warning') return 'border-amber-500';
-    if (node.status === 'offline') return 'border-rose-500';
+    if (nodeStatus(node) === 'warning') return 'border-amber-500';
+    if (nodeStatus(node) === 'offline') return 'border-rose-500';
     return 'border-slate-200 dark:border-slate-700 hover:border-cyan-500';
   };
 
@@ -535,7 +541,7 @@ export const TopologyPage: React.FC = () => {
               const targetNode = topologyNodes.find(n => n.id === link.target);
               if (!sourceNode || !targetNode) return null;
 
-              const isDegraded = link.status === 'degraded';
+              const isDegraded = link.status === 'degraded' || link.status === 'down';
               const isSelected = selectedLinkId === link.id;
               const a = nodeCenter(sourceNode);
               const b = nodeCenter(targetNode);
@@ -681,9 +687,9 @@ export const TopologyPage: React.FC = () => {
                   </div>
                   <span
                     className={`w-2 h-2 rounded-full mt-1 ${
-                      node.status === 'online'
+                      nodeStatus(node) === 'online'
                         ? 'bg-emerald-500 shadow-xs shadow-emerald-500'
-                        : node.status === 'warning'
+                        : nodeStatus(node) === 'warning'
                         ? 'bg-amber-500 animate-pulse'
                         : 'bg-rose-500'
                     }`}
@@ -771,14 +777,14 @@ export const TopologyPage: React.FC = () => {
                 IP: {selectedNode.ip} · Status:{' '}
                 <span
                   className={`font-semibold ${
-                    selectedNode.status === 'online'
+                    nodeStatus(selectedNode) === 'online'
                       ? 'text-emerald-500'
-                      : selectedNode.status === 'warning'
+                      : nodeStatus(selectedNode) === 'warning'
                       ? 'text-amber-500'
                       : 'text-rose-500'
                   }`}
                 >
-                  {selectedNode.status.toUpperCase()}
+                  {nodeStatus(selectedNode).toUpperCase()}
                 </span>
                 {selectedNode.model && ` · Model: ${selectedNode.model}`}
               </div>
@@ -786,7 +792,7 @@ export const TopologyPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            {portSwitch && (
+            {portSwitch && !isViewer && (
               <button
                 onClick={() => navigate(`/ports?device=${encodeURIComponent(portSwitch.id)}`)}
                 title={`${portSwitch.name} (${portSwitch.ip})`}
@@ -797,7 +803,7 @@ export const TopologyPage: React.FC = () => {
               </button>
             )}
             <button
-              onClick={() => setSelectedNode(null)}
+              onClick={() => setSelectedNodeId(null)}
               className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold"
             >
               Close Info

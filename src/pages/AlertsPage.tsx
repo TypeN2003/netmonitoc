@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useLanguage } from '../context/LanguageContext';
-import { useNetworkData } from '../context/NetworkDataContext';
+import { useNetworkData, alertText } from '../context/NetworkDataContext';
 import { useAuth } from '../context/AuthContext';
 import {
   AlertTriangle,
@@ -18,7 +18,7 @@ import {
 import { IncidentAlert, AlertNote } from '../types';
 
 export const AlertsPage: React.FC = () => {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { alerts, acknowledgeAlert, resolveAlert } = useNetworkData();
   const { currentUser, isAdmin, isEngineer, isViewer } = useAuth();
 
@@ -36,10 +36,13 @@ export const AlertsPage: React.FC = () => {
   const filteredAlerts = alerts.filter(a => {
     const matchesSeverity = severityFilter === 'all' || a.severity === severityFilter;
     const matchesStatus = statusFilter === 'all' || a.status === statusFilter;
+    const q = search.toLowerCase();
+    const text = alertText(a, lang);
     const matchesSearch =
-      a.deviceName.toLowerCase().includes(search.toLowerCase()) ||
-      a.message.toLowerCase().includes(search.toLowerCase()) ||
-      a.category.toLowerCase().includes(search.toLowerCase()) ||
+      a.deviceName.toLowerCase().includes(q) ||
+      text.message.toLowerCase().includes(q) ||
+      text.category.toLowerCase().includes(q) ||
+      a.notes.some(n => n.text.toLowerCase().includes(q)) ||
       a.deviceIp.includes(search);
     return matchesSeverity && matchesStatus && matchesSearch;
   });
@@ -104,7 +107,7 @@ export const AlertsPage: React.FC = () => {
           {t('alarmIncidentDeck')}
         </h1>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-          Real-time incident response deck with role-based diagnostic note filing & historical audit trail
+          {t('alertsSubtitle')}
         </p>
       </div>
 
@@ -116,7 +119,7 @@ export const AlertsPage: React.FC = () => {
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search incident, device, IP or note..."
+            placeholder={t('alertsSearchPlaceholder')}
             className="w-full bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-cyan-500"
           />
         </div>
@@ -139,16 +142,16 @@ export const AlertsPage: React.FC = () => {
 
           {/* Status Filter */}
           <div className="flex items-center gap-2">
-            <span className="text-slate-500 text-[11px] whitespace-nowrap">Status:</span>
+            <span className="text-slate-500 text-[11px] whitespace-nowrap">{t('alertStatusLabel')}:</span>
             <select
               value={statusFilter}
               onChange={e => setStatusFilter(e.target.value)}
               className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none"
             >
-              <option value="all">All States</option>
-              <option value="active">Active Incidents</option>
-              <option value="acknowledged">Acknowledged</option>
-              <option value="resolved">Resolved</option>
+              <option value="all">{t('alertStatusAll')}</option>
+              <option value="active">{t('alertStatusActive')}</option>
+              <option value="acknowledged">{t('alertStatusAcknowledged')}</option>
+              <option value="resolved">{t('alertStatusResolved')}</option>
             </select>
           </div>
         </div>
@@ -158,7 +161,7 @@ export const AlertsPage: React.FC = () => {
       <div className="space-y-4">
         {filteredAlerts.length === 0 ? (
           <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-8 text-center text-slate-400 text-xs">
-            No incident alarms found matching selected filters.
+            {t('alertsEmpty')}
           </div>
         ) : (
           filteredAlerts.map(alert => (
@@ -177,18 +180,18 @@ export const AlertsPage: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     {getSeverityBadge(alert.severity)}
                     <span className="font-bold text-sm text-slate-900 dark:text-white">
-                      {alert.category}
+                      {alertText(alert, lang).category}
                     </span>
                     <span className="text-xs font-mono text-slate-400">({alert.id})</span>
                   </div>
 
                   <p className="text-xs text-slate-700 dark:text-slate-300 font-sans leading-relaxed">
-                    {alert.message}
+                    {alertText(alert, lang).message}
                   </p>
 
                   <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 font-mono pt-1">
                     <span>
-                      Device: <strong className="text-cyan-600 dark:text-cyan-400">{alert.deviceName}</strong> ({alert.deviceIp})
+                      {t('alertDeviceLabel')}: <strong className="text-cyan-600 dark:text-cyan-400">{alert.deviceName}</strong> ({alert.deviceIp})
                     </span>
                     <span>·</span>
                     <span className="flex items-center gap-1">
@@ -199,7 +202,7 @@ export const AlertsPage: React.FC = () => {
                       <>
                         <span>·</span>
                         <span className="text-amber-600 dark:text-amber-400 font-semibold">
-                          Ack by: {alert.acknowledgedBy} ({alert.acknowledgedAt?.slice(11)})
+                          {t('alertAckByLabel')}: {alert.acknowledgedBy} ({alert.acknowledgedAt?.slice(11)})
                         </span>
                       </>
                     )}
@@ -231,7 +234,7 @@ export const AlertsPage: React.FC = () => {
                   {alert.status === 'resolved' && (
                     <span className="text-[11px] font-mono text-emerald-500 font-semibold flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      Resolved
+                      {t('alertStatusResolved')}
                     </span>
                   )}
                 </div>
@@ -293,7 +296,7 @@ export const AlertsPage: React.FC = () => {
                 {activeAlertForAck.deviceName} ({activeAlertForAck.deviceIp})
               </div>
               <p className="text-slate-600 dark:text-slate-400 mt-0.5 line-clamp-2">
-                {activeAlertForAck.message}
+                {alertText(activeAlertForAck, lang).message}
               </p>
             </div>
 
@@ -325,7 +328,7 @@ export const AlertsPage: React.FC = () => {
                   </div>
                 )}
                 <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-                  Author: <strong className="text-slate-700 dark:text-slate-300">{currentUser?.name}</strong> ({currentUser?.role})
+                  {t('alertAuthorLabel')}: <strong className="text-slate-700 dark:text-slate-300">{currentUser?.name}</strong> ({currentUser?.role})
                 </span>
               </div>
 

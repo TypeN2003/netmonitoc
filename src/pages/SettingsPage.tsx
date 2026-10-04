@@ -37,7 +37,9 @@ export const SettingsPage: React.FC = () => {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    updateSettings(formData);
+    // The backup policy is edited and saved in its own tab; never overwrite it with this form's stale copy
+    const { backupPolicy: _staleBackupPolicy, ...generalSettings } = formData;
+    updateSettings(generalSettings);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2500);
   };

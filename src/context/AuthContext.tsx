@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, Role, UserPermissions } from '../types';
+import { nowTimestamp } from './NetworkDataContext';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -13,7 +14,7 @@ interface AuthContextType {
   updateUserPermissions: (userId: string, perms: Partial<UserPermissions>) => void;
   updateUserRole: (userId: string, role: Role) => void;
   deleteUser: (userId: string) => void;
-  createUser: (user: Omit<User, 'id' | 'createdAt' | 'lastLogin'>) => void;
+  createUser: (user: Omit<User, 'id' | 'createdAt' | 'lastLogin'>) => { success: boolean; error?: string };
   activeOtpData: { email: string; otp: string; expiresAt: number } | null;
   isAdmin: boolean;
   isEngineer: boolean;
@@ -158,7 +159,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const updatedUser = {
       ...found,
-      lastLogin: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      lastLogin: nowTimestamp(),
     };
 
     setRememberSession(remember);
@@ -188,8 +189,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       role: assignedRole,
       department: department || 'Operations',
       status: 'Active',
-      createdAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
-      lastLogin: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      createdAt: nowTimestamp(),
+      lastLogin: nowTimestamp(),
       permissions: assignedRole === 'Admin' ? DEFAULT_ADMIN_PERMISSIONS : DEFAULT_ENGINEER_PERMISSIONS,
     };
 
@@ -321,13 +322,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const createUser = (userData: Omit<User, 'id' | 'createdAt' | 'lastLogin'>) => {
+    // Login looks users up by email or name, so both must be unique
+    const email = userData.email.trim().toLowerCase();
+    const name = userData.name.trim().toLowerCase();
+    if (users.some(u => u.email.toLowerCase() === email)) {
+      return { success: false, error: 'This email is already registered' };
+    }
+    if (users.some(u => u.name.toLowerCase() === name)) {
+      return { success: false, error: 'This username is already taken' };
+    }
     const newUser: User = {
       ...userData,
       id: `usr-${Date.now().toString(36)}`,
-      createdAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      createdAt: nowTimestamp(),
       lastLogin: 'Never',
     };
     setUsers(prev => [...prev, newUser]);
+    return { success: true };
   };
 
   const role = currentUser?.role || 'Viewer';

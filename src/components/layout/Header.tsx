@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useTheme } from '../../context/ThemeContext';
-import { useNetworkData } from '../../context/NetworkDataContext';
+import { useNetworkData, alertText } from '../../context/NetworkDataContext';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Activity,
@@ -58,12 +58,12 @@ export const Header: React.FC = () => {
   const getRoleBadgeStyle = (role?: Role) => {
     switch (role) {
       case 'Admin':
-        return 'bg-rose-500/20 text-rose-300 border-rose-500/30';
+        return 'bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-500/20 dark:text-rose-300 dark:border-rose-500/30';
       case 'Engineer':
-        return 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30';
+        return 'bg-cyan-100 text-cyan-700 border-cyan-300 dark:bg-cyan-500/20 dark:text-cyan-300 dark:border-cyan-500/30';
       case 'Viewer':
       default:
-        return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+        return 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/20 dark:text-amber-300 dark:border-amber-500/30';
     }
   };
 
@@ -235,7 +235,7 @@ export const Header: React.FC = () => {
                         <span className="font-semibold text-slate-900 dark:text-slate-100">{alert.deviceName}</span>
                         <span className="text-[10px] text-slate-400 font-mono">{alert.timestamp.slice(11)}</span>
                       </div>
-                      <p className="text-slate-600 dark:text-slate-300 mt-1 line-clamp-2">{alert.message}</p>
+                      <p className="text-slate-600 dark:text-slate-300 mt-1 line-clamp-2">{alertText(alert, lang).message}</p>
                     </div>
                   ))
                 )}

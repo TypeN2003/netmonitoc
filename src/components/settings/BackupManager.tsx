@@ -81,7 +81,8 @@ export const BackupManager: React.FC = () => {
       alert('Only Administrator accounts can modify automated backup policies.');
       return;
     }
-    updateSettings({ backupPolicy: policy });
+    // Keep the last global backup time, which may have changed since this form was opened
+    updateSettings({ backupPolicy: { ...policy, lastGlobalBackup: settings.backupPolicy.lastGlobalBackup } });
     setPolicySaved(true);
     showNotification(t('settingsSaved'));
     setTimeout(() => setPolicySaved(false), 2500);

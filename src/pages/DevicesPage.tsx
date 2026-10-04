@@ -28,7 +28,14 @@ import { NetworkDevice, DeviceType } from '../types';
 
 export const DevicesPage: React.FC = () => {
   const { t } = useLanguage();
-  const { devices, addDevice, updateDevice, deleteDevice, createBackup } = useNetworkData();
+  const { devices, portsByDevice, addDevice, updateDevice, deleteDevice, createBackup } = useNetworkData();
+
+  // Switches with port data show the live count from the Ports page; others keep their inventory figures
+  const portCounts = (device: NetworkDevice) => {
+    const ports = portsByDevice[device.id];
+    if (!ports?.length) return { up: device.portsUp, total: device.portsTotal };
+    return { up: ports.filter(p => p.adminUp && p.status !== 'down').length, total: ports.length };
+  };
   const { currentUser, isAdmin, isEngineer, isViewer } = useAuth();
   const navigate = useNavigate();
 
@@ -374,8 +381,8 @@ export const DevicesPage: React.FC = () => {
 
                     {/* Ports UP / Total */}
                     <td className="py-3 px-4 text-right font-mono tabular-nums">
-                      <span className="font-semibold text-emerald-600 dark:text-emerald-400">{device.portsUp}</span>
-                      <span className="text-slate-400"> / {device.portsTotal}</span>
+                      <span className="font-semibold text-emerald-600 dark:text-emerald-400">{portCounts(device).up}</span>
+                      <span className="text-slate-400"> / {portCounts(device).total}</span>
                     </td>
 
                     {/* Actions */}
