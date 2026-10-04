@@ -51,14 +51,14 @@ export const EventLogsPage: React.FC = () => {
       case 'critical':
         return 'text-rose-500 font-bold';
       case 'error':
-        return 'text-rose-400 font-semibold';
+        return 'text-rose-600 dark:text-rose-400 font-semibold';
       case 'warning':
-        return 'text-amber-500 font-semibold';
+        return 'text-amber-600 dark:text-amber-500 font-semibold';
       case 'notice':
-        return 'text-cyan-400 font-medium';
+        return 'text-cyan-600 dark:text-cyan-400 font-medium';
       case 'info':
       default:
-        return 'text-slate-400';
+        return 'text-slate-500 dark:text-slate-400';
     }
   };
 
@@ -135,10 +135,10 @@ export const EventLogsPage: React.FC = () => {
       </div>
 
       {/* Syslog Stream Table */}
-      <div className="bg-slate-950 text-slate-200 rounded-xl border border-slate-800 shadow-2xl overflow-hidden font-mono text-xs">
+      <div className="bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-200 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm dark:shadow-2xl overflow-hidden font-mono text-xs">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 uppercase tracking-wider">
+            <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 uppercase tracking-wider">
               <tr>
                 <th className="py-2.5 px-4 w-44">{t('timestamp')}</th>
                 <th className="py-2.5 px-3 w-24">{t('severity')}</th>
@@ -148,20 +148,20 @@ export const EventLogsPage: React.FC = () => {
                 <th className="py-2.5 px-4">{t('logMessage')}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
               {filteredLogs.map(log => (
-                <tr key={log.id} className="hover:bg-slate-900/60 transition-colors">
-                  <td className="py-2.5 px-4 text-slate-400 text-[11px] tabular-nums">{log.timestamp}</td>
+                <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/60 transition-colors">
+                  <td className="py-2.5 px-4 text-slate-500 dark:text-slate-400 text-[11px] tabular-nums">{log.timestamp}</td>
                   <td className={`py-2.5 px-3 text-[11px] ${getSeverityStyle(log.severity)}`}>
                     {log.severity}
                   </td>
-                  <td className="py-2.5 px-3 text-slate-400 text-[11px]">{log.facility}</td>
+                  <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400 text-[11px]">{log.facility}</td>
                   <td className="py-2.5 px-4">
-                    <span className="font-semibold text-slate-200">{log.host}</span>
-                    <span className="text-slate-500 text-[10px] block">{log.ip}</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">{log.host}</span>
+                    <span className="text-slate-400 dark:text-slate-500 text-[10px] block">{log.ip}</span>
                   </td>
-                  <td className="py-2.5 px-4 text-cyan-400 text-[11px]">{log.tag}</td>
-                  <td className="py-2.5 px-4 text-slate-300 font-sans text-xs break-all">{log.message}</td>
+                  <td className="py-2.5 px-4 text-cyan-600 dark:text-cyan-400 text-[11px]">{log.tag}</td>
+                  <td className="py-2.5 px-4 text-slate-700 dark:text-slate-300 font-sans text-xs break-all">{log.message}</td>
                 </tr>
               ))}
             </tbody>

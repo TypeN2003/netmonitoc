@@ -651,7 +651,7 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
                 <Split className="w-3.5 h-3.5" />
                 <span>{t('compareDiff')}</span>
                 {(addedCount > 0 || removedCount > 0) && (
-                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-900 text-cyan-300 font-mono">
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-50 dark:bg-slate-900 text-cyan-700 dark:text-cyan-300 font-mono">
                     +{addedCount} / -{removedCount}
                   </span>
                 )}
@@ -713,14 +713,14 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
 
           {/* Content Area: Tab 1 = Editor */}
           {activeTab === 'editor' && (
-            <div className="relative rounded-xl border border-slate-800 overflow-hidden bg-slate-950 shadow-inner">
-              <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 font-mono">
+            <div className="relative rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-50 dark:bg-slate-950 shadow-inner">
+              <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                 <span>CLI Terminal Running-Config Editor</span>
                 <span>Encoding: UTF-8 (Unix LF)</span>
               </div>
               <div className="flex">
                 {/* Line Numbers */}
-                <div className="w-10 py-3 bg-slate-900/60 text-slate-600 font-mono text-xs select-none text-right pr-2 space-y-0.5 border-r border-slate-800">
+                <div className="w-10 py-3 bg-slate-50 dark:bg-slate-900/60 text-slate-400 dark:text-slate-600 font-mono text-xs select-none text-right pr-2 space-y-0.5 border-r border-slate-200 dark:border-slate-800">
                   {Array.from({ length: Math.max(1, totalLines) }).map((_, i) => (
                     <div key={i} className="leading-5">
                       {i + 1}
@@ -739,7 +739,7 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
                   rows={13}
                   spellCheck={false}
                   placeholder="! Paste startup-config or running-config commands here..."
-                  className="flex-1 bg-transparent text-emerald-400 font-mono text-xs p-3 focus:outline-none leading-5 resize-none selection:bg-cyan-800/60"
+                  className="flex-1 bg-transparent text-emerald-600 dark:text-emerald-400 font-mono text-xs p-3 focus:outline-none leading-5 resize-none selection:bg-cyan-200 dark:selection:bg-cyan-800/60"
                 ></textarea>
               </div>
             </div>
@@ -747,12 +747,12 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
 
           {/* Content Area: Tab 2 = Visual Diff */}
           {activeTab === 'diff' && (
-            <div className="rounded-xl border border-slate-800 overflow-hidden bg-slate-950 font-mono text-xs">
-              <div className="flex items-center justify-between px-3 py-2 bg-slate-900 border-b border-slate-800 text-[11px]">
-                <span className="text-slate-300 font-semibold">{t('diffModeTitle')}</span>
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-50 dark:bg-slate-950 font-mono text-xs">
+              <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[11px]">
+                <span className="text-slate-700 dark:text-slate-300 font-semibold">{t('diffModeTitle')}</span>
                 <div className="flex items-center gap-3">
-                  <span className="text-emerald-400 font-medium">+{addedCount} additions</span>
-                  <span className="text-rose-400 font-medium">-{removedCount} removals</span>
+                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">+{addedCount} additions</span>
+                  <span className="text-rose-600 dark:text-rose-400 font-medium">-{removedCount} removals</span>
                 </div>
               </div>
               <div className="max-h-[300px] overflow-y-auto p-2 space-y-0.5">
@@ -766,13 +766,13 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
                       key={idx}
                       className={`flex items-start px-2 py-0.5 rounded leading-5 ${
                         line.type === 'added'
-                          ? 'bg-emerald-950/50 text-emerald-300 border-l-2 border-emerald-500'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-l-2 border-emerald-500'
                           : line.type === 'removed'
-                          ? 'bg-rose-950/50 text-rose-300 border-l-2 border-rose-500'
-                          : 'text-slate-400'
+                          ? 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-l-2 border-rose-500'
+                          : 'text-slate-500 dark:text-slate-400'
                       }`}
                     >
-                      <span className="w-8 select-none text-slate-600 text-[10px] text-right pr-2">
+                      <span className="w-8 select-none text-slate-400 dark:text-slate-600 text-[10px] text-right pr-2">
                         {line.lineNum || ''}
                       </span>
                       <span className="w-4 select-none font-bold">

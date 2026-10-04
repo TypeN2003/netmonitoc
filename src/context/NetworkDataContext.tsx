@@ -54,7 +54,9 @@ interface NetworkDataContextType {
   addTopologyNode: (node: Omit<TopologyNode, 'id'>) => void;
   deleteTopologyNode: (id: string) => void;
   toggleSubtreeCollapse: (nodeId: string) => void;
-  connectTopologyLink: (source: string, target: string, linkType: 'fiber_10g' | 'copper_1g' | 'fiber_40g' | 'trunk') => void;
+  connectTopologyLink: (source: string, target: string, linkType: TopologyLink['linkType']) => boolean;
+  updateTopologyLinkType: (linkId: string, linkType: TopologyLink['linkType']) => void;
+  deleteTopologyLink: (linkId: string) => void;
   saveTopologyLayout: () => void;
   acknowledgeAlert: (alertId: string, noteText: string, author: string, role: Role) => void;
   resolveAlert: (alertId: string) => void;
@@ -1232,32 +1234,46 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
     );
   };
 
-  const connectTopologyLink = (source: string, target: string, linkType: 'fiber_10g' | 'copper_1g' | 'fiber_40g' | 'trunk') => {
+  const linkSpeedLabels: Record<TopologyLink['linkType'], string> = {
+    fiber_10g: '10 Gbps SFP+',
+    copper_1g: '1 Gbps Cat6',
+    fiber_40g: '40 Gbps QSFP+',
+    trunk: 'VLAN 802.1Q Trunk',
+  };
+
+  const persistLinks = (updatedLinks: TopologyLink[]) => {
+    setTopologyLinks(updatedLinks);
+    localStorage.setItem('netmonitor_topology_links', JSON.stringify(updatedLinks));
+  };
+
+  // Returns false when the nodes are identical or already linked.
+  const connectTopologyLink = (source: string, target: string, linkType: TopologyLink['linkType']) => {
+    if (source === target) return false;
     const exists = topologyLinks.some(
       l => (l.source === source && l.target === target) || (l.source === target && l.target === source)
     );
-    if (exists) {
-      alert('A network link between these two nodes already exists.');
-      return;
-    }
+    if (exists) return false;
 
-    const speedMap = {
-      fiber_10g: '10 Gbps SFP+',
-      copper_1g: '1 Gbps Cat6',
-      fiber_40g: '40 Gbps QSFP+',
-      trunk: 'VLAN 802.1Q Trunk',
-    };
     const newLink: TopologyLink = {
       id: `link-${Date.now().toString(36)}`,
       source,
       target,
-      speed: speedMap[linkType],
+      speed: linkSpeedLabels[linkType],
       linkType,
       status: 'up',
     };
-    const updatedLinks = [...topologyLinks, newLink];
-    setTopologyLinks(updatedLinks);
-    localStorage.setItem('netmonitor_topology_links', JSON.stringify(updatedLinks));
+    persistLinks([...topologyLinks, newLink]);
+    return true;
+  };
+
+  const updateTopologyLinkType = (linkId: string, linkType: TopologyLink['linkType']) => {
+    persistLinks(
+      topologyLinks.map(l => (l.id === linkId ? { ...l, linkType, speed: linkSpeedLabels[linkType] } : l))
+    );
+  };
+
+  const deleteTopologyLink = (linkId: string) => {
+    persistLinks(topologyLinks.filter(l => l.id !== linkId));
   };
 
   const saveTopologyLayout = () => {
@@ -1366,6 +1382,8 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
         deleteTopologyNode,
         toggleSubtreeCollapse,
         connectTopologyLink,
+        updateTopologyLinkType,
+        deleteTopologyLink,
         saveTopologyLayout,
         acknowledgeAlert,
         resolveAlert,

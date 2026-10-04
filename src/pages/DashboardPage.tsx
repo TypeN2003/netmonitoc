@@ -7,8 +7,6 @@ import {
   Server,
   Activity,
   AlertTriangle,
-  Wifi,
-  Users,
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
@@ -33,15 +31,13 @@ import {
 
 export const DashboardPage: React.FC = () => {
   const { t } = useLanguage();
-  const { devices, accessPoints, clients, alerts, vlans, refreshTelemetry, isTelemetrySyncing } = useNetworkData();
+  const { devices, clients, alerts, vlans, refreshTelemetry, isTelemetrySyncing } = useNetworkData();
   const { currentUser } = useAuth();
   const navigate = useNavigate();
 
   const totalDevices = devices.length;
   const activeDevices = devices.filter(d => d.status === 'online').length;
   const issueDevices = devices.filter(d => d.status !== 'online').length;
-  const activeAps = accessPoints.filter(ap => ap.status === 'online').length;
-  const totalClients = 1480; // Scaled enterprise representation
   const activeCriticalAlerts = alerts.filter(a => a.severity === 'critical' && a.status === 'active');
 
   // Realistic telemetry data points (Gbps)
@@ -102,7 +98,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* Top Metric Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Total Hardware Nodes */}
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
@@ -143,35 +139,6 @@ export const DashboardPage: React.FC = () => {
           </div>
           <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-500 font-mono">
             <span>1 Degraded · 0 Offline</span>
-          </div>
-        </div>
-
-        {/* Broadcasting APs */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-[11px] font-medium uppercase tracking-wider">{t('broadcastingAPs')}</span>
-            <Wifi className="w-4 h-4 text-cyan-500" />
-          </div>
-          <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white tabular-nums">
-            {activeAps} / {accessPoints.length}
-          </div>
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-cyan-600 dark:text-cyan-400 font-mono">
-            <span>Wi-Fi 6 & 6E Active</span>
-          </div>
-        </div>
-
-        {/* Active Connected Clients */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-[11px] font-medium uppercase tracking-wider">{t('activeClients')}</span>
-            <Users className="w-4 h-4 text-blue-500" />
-          </div>
-          <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white tabular-nums">
-            {totalClients.toLocaleString()}
-          </div>
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-blue-500 font-mono">
-            <ArrowUpRight className="w-3 h-3" />
-            <span>+142 this hour</span>
           </div>
         </div>
 
@@ -295,10 +262,10 @@ export const DashboardPage: React.FC = () => {
             </div>
             <div
               onClick={() => navigate('/topology')}
-              className="h-24 bg-slate-900 rounded-lg border border-slate-800 p-2 relative overflow-hidden cursor-pointer group flex items-center justify-center"
+              className="h-24 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 p-2 relative overflow-hidden cursor-pointer group flex items-center justify-center"
             >
               {/* Abstract mini topology nodes visualization */}
-              <div className="absolute inset-0 bg-radial from-cyan-900/20 to-transparent"></div>
+              <div className="absolute inset-0 bg-radial from-cyan-100/60 dark:from-cyan-900/20 to-transparent"></div>
               <div className="flex items-center gap-6 relative z-10">
                 <div className="w-6 h-6 rounded-md bg-blue-600 flex items-center justify-center text-[10px] text-white font-mono shadow-xs">
                   WAN
@@ -312,7 +279,7 @@ export const DashboardPage: React.FC = () => {
                   DIST
                 </div>
               </div>
-              <div className="absolute bottom-1 right-2 text-[9px] text-slate-500 font-mono group-hover:text-cyan-400 transition-colors">
+              <div className="absolute bottom-1 right-2 text-[9px] text-slate-500 font-mono group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors">
                 Click to explore 5-tier topology map
               </div>
             </div>
