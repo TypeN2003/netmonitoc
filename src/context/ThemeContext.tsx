@@ -14,7 +14,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [theme, setThemeState] = useState<Theme>(() => {
     const saved = localStorage.getItem('netmonitor_theme');
     if (saved === 'light' || saved === 'dark') return saved;
-    return 'dark'; // Cisco DNA / PRTG dark network operations center default
+    return 'light';
   });
 
   useEffect(() => {

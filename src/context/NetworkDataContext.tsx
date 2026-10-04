@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   NetworkDevice,
+  DeviceType,
   PortInfo,
   VlanInfo,
   AccessPoint,
@@ -433,17 +434,13 @@ const INITIAL_TOPOLOGY_NODES: TopologyNode[] = [
   { id: 'node-dist-west', label: 'Dist-SW-West (Building C)', ip: '10.10.0.3', tier: 4, type: 'dist_switch', status: 'warning', x: 620, y: 460, model: 'Catalyst 9300-48P' },
   { id: 'node-srv-cluster', label: 'Core Server Farm (SAN / Hyper-V)', ip: '10.10.100.10', tier: 4, type: 'server', status: 'online', x: 940, y: 460, model: 'PowerEdge R750 Cluster' },
 
-  // Tier 5: Edge Layer (APs & Host Groups)
+  // Tier 5: Edge Layer (APs)
   { id: 'node-edge-sw-lab', label: 'Edge-SW-CompLab-01', ip: '10.10.10.15', tier: 5, type: 'edge_ap', status: 'online', x: 160, y: 640, model: 'Aruba CX 6200F' },
-  { id: 'node-hosts-lab', label: 'Computer Lab Workstations', ip: '10.10.20.0/24', tier: 5, type: 'host_group', status: 'online', x: 160, y: 780, groupCount: 85, isCollapsed: true, subClients: ['PC-Lab-01 to PC-Lab-85 (VLAN 20)'] },
 
   { id: 'node-ap-east', label: 'AP Cluster East (Eng Labs)', ip: '10.10.10.53', tier: 5, type: 'edge_ap', status: 'online', x: 380, y: 640, model: 'Aruba AP-635 Cluster' },
-  { id: 'node-hosts-wifi-east', label: 'Active Wireless Clients (East)', ip: '10.10.50.0/22', tier: 5, type: 'host_group', status: 'online', x: 380, y: 780, groupCount: 122, isCollapsed: true, subClients: ['68 Staff Laptops', '54 Mobile Devices'] },
 
   { id: 'node-ap-west', label: 'AP Cluster West (Auditorium & Admin)', ip: '10.10.10.55', tier: 5, type: 'edge_ap', status: 'warning', x: 620, y: 640, model: 'Ruckus R850 Array' },
-  { id: 'node-hosts-auditorium', label: 'Auditorium Audience Devices', ip: '10.10.60.0/22', tier: 5, type: 'host_group', status: 'warning', x: 620, y: 780, groupCount: 115, isCollapsed: true, subClients: ['115 Guest Smartphones (VLAN 60)'] },
 
-  { id: 'node-hosts-datacenter', label: 'Datacenter Virtual VMs', ip: '10.10.100.0/24', tier: 5, type: 'host_group', status: 'online', x: 940, y: 640, groupCount: 42, isCollapsed: true, subClients: ['AD-DC-01', 'DNS-Master', 'FileServer-01', 'Radius-NPS'] },
 ];
 
 const INITIAL_TOPOLOGY_LINKS: TopologyLink[] = [
@@ -453,12 +450,8 @@ const INITIAL_TOPOLOGY_LINKS: TopologyLink[] = [
   { id: 'link-core-dist-west', source: 'node-core-sw', target: 'node-dist-west', speed: '10 Gbps LACP', linkType: 'fiber_10g', status: 'degraded' },
   { id: 'link-core-srv', source: 'node-core-sw', target: 'node-srv-cluster', speed: '40 Gbps DAC', linkType: 'fiber_40g', status: 'up' },
   { id: 'link-dist-east-labsw', source: 'node-dist-east', target: 'node-edge-sw-lab', speed: '10 Gbps SFP+', linkType: 'fiber_10g', status: 'up' },
-  { id: 'link-labsw-hosts', source: 'node-edge-sw-lab', target: 'node-hosts-lab', speed: '1 Gbps x 85', linkType: 'copper_1g', status: 'up' },
   { id: 'link-dist-east-ap', source: 'node-dist-east', target: 'node-ap-east', speed: '2.5 Gbps mGig PoE+', linkType: 'copper_1g', status: 'up' },
-  { id: 'link-ap-east-hosts', source: 'node-ap-east', target: 'node-hosts-wifi-east', speed: 'Wi-Fi 6E RF', linkType: 'copper_1g', status: 'up' },
   { id: 'link-dist-west-ap', source: 'node-dist-west', target: 'node-ap-west', speed: '2.5 Gbps mGig PoE+', linkType: 'copper_1g', status: 'degraded' },
-  { id: 'link-ap-west-hosts', source: 'node-ap-west', target: 'node-hosts-auditorium', speed: 'Wi-Fi 6 RF', linkType: 'copper_1g', status: 'degraded' },
-  { id: 'link-srv-hosts', source: 'node-srv-cluster', target: 'node-hosts-datacenter', speed: 'Virtual vSwitch 40G', linkType: 'fiber_40g', status: 'up' },
 ];
 
 const INITIAL_ALERTS: IncidentAlert[] = [
@@ -554,7 +547,6 @@ const INITIAL_SETTINGS: SystemSettings = {
   snmpInterval: 30,
   pingTimeoutMs: 1500,
   packetLossThreshold: 5,
-  slackWebhook: 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX',
   telegramBotToken: '6892419021:AAHEu9Wj42801Fkx_netmonitor_bot',
   telegramChatId: '-1002938491028',
   emailNotification: 'noc-alerts@kmutnb.ac.th',
@@ -578,6 +570,31 @@ const INITIAL_SETTINGS: SystemSettings = {
     lastGlobalBackup: '2026-09-28 02:00:45',
   },
 };
+
+// Alert thresholds: a device at or above these values is flagged Warning and raises an alert
+export const CPU_THRESHOLD = 85;
+export const RAM_THRESHOLD = 90;
+
+// Baseline throughput (Mbps in / out) per device type, used when a device has no traffic data yet
+const BASELINE_TRAFFIC: Record<DeviceType, [number, number]> = {
+  Router: [850, 420],
+  Firewall: [780, 390],
+  'Core Switch': [2400, 1900],
+  'Distribution Switch': [950, 610],
+  'Edge Switch': [320, 180],
+  Server: [640, 880],
+};
+
+const withTraffic = (d: NetworkDevice): NetworkDevice => {
+  if (d.trafficInMbps !== undefined && d.trafficOutMbps !== undefined) return d;
+  const [inMbps, outMbps] = d.status === 'offline' ? [0, 0] : BASELINE_TRAFFIC[d.type] || [100, 50];
+  return { ...d, trafficInMbps: inMbps, trafficOutMbps: outMbps };
+};
+
+const fluctuate = (value: number, spread: number) =>
+  Math.max(0, Math.round(value * (1 + (Math.random() - 0.5) * spread)));
+
+const nowTimestamp = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
 const generateMockSha256 = (content: string) => {
   let hash = 0;
@@ -857,7 +874,8 @@ const NetworkDataContext = createContext<NetworkDataContextType | undefined>(und
 export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [devices, setDevices] = useState<NetworkDevice[]>(() => {
     const saved = localStorage.getItem('netmonitor_devices');
-    return saved ? JSON.parse(saved) : INITIAL_DEVICES;
+    const list: NetworkDevice[] = saved ? JSON.parse(saved) : INITIAL_DEVICES;
+    return list.map(withTraffic);
   });
 
   const [vlans, setVlans] = useState<VlanInfo[]>(() => {
@@ -872,14 +890,17 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const [clients] = useState<ClientSession[]>(INITIAL_CLIENTS);
 
+  // Host group nodes were removed from the topology; drop any still present in saved data
   const [topologyNodes, setTopologyNodes] = useState<TopologyNode[]>(() => {
     const saved = localStorage.getItem('netmonitor_topology_nodes');
-    return saved ? JSON.parse(saved) : INITIAL_TOPOLOGY_NODES;
+    const nodes: TopologyNode[] = saved ? JSON.parse(saved) : INITIAL_TOPOLOGY_NODES;
+    return nodes.filter(n => n.type !== 'host_group');
   });
 
   const [topologyLinks, setTopologyLinks] = useState<TopologyLink[]>(() => {
     const saved = localStorage.getItem('netmonitor_topology_links');
-    return saved ? JSON.parse(saved) : INITIAL_TOPOLOGY_LINKS;
+    const links: TopologyLink[] = saved ? JSON.parse(saved) : INITIAL_TOPOLOGY_LINKS;
+    return links.filter(l => topologyNodes.some(n => n.id === l.source) && topologyNodes.some(n => n.id === l.target));
   });
 
   const [alerts, setAlerts] = useState<IncidentAlert[]>(() => {
@@ -934,12 +955,12 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, [backups]);
 
   const addDevice = (deviceData: Omit<NetworkDevice, 'id' | 'uptime' | 'lastSeen'>) => {
-    const newDevice: NetworkDevice = {
+    const newDevice: NetworkDevice = withTraffic({
       ...deviceData,
       id: `dev-${Date.now().toString(36)}`,
       uptime: '0d 00h 01m',
       lastSeen: 'Just now',
-    };
+    });
     setDevices(prev => [newDevice, ...prev]);
 
     // Also init ports if switch
@@ -1335,21 +1356,89 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setSettings(prev => ({ ...prev, ...newSettings }));
   };
 
+  // Latest state for the polling timer, which would otherwise see stale closures
+  const devicesRef = useRef(devices);
+  const alertsRef = useRef(alerts);
+  devicesRef.current = devices;
+  alertsRef.current = alerts;
+
   const refreshTelemetry = () => {
     setIsTelemetrySyncing(true);
     setTimeout(() => {
       // Slightly fluctuate metrics for realistic dynamic NOC feel
-      setDevices(prev =>
-        prev.map(d => ({
+      const polled = devicesRef.current.map(d => {
+        if (d.status === 'offline') return d;
+        const cpu = Math.min(99, Math.max(8, d.cpu + Math.floor((Math.random() - 0.45) * 6)));
+        const ram = Math.min(95, Math.max(20, d.ram + Math.floor((Math.random() - 0.48) * 4)));
+        const overThreshold = cpu >= CPU_THRESHOLD || ram >= RAM_THRESHOLD;
+        return {
           ...d,
-          cpu: Math.min(99, Math.max(8, d.cpu + Math.floor((Math.random() - 0.45) * 6))),
-          ram: Math.min(95, Math.max(20, d.ram + Math.floor((Math.random() - 0.48) * 4))),
+          cpu,
+          ram,
           pingMs: parseFloat((d.pingMs + (Math.random() - 0.5) * 0.3).toFixed(1)),
-        }))
-      );
+          trafficInMbps: fluctuate(d.trafficInMbps ?? 0, 0.2),
+          trafficOutMbps: fluctuate(d.trafficOutMbps ?? 0, 0.2),
+          status: overThreshold ? ('warning' as const) : d.status,
+        };
+      });
+
+      // Raise one alert per device that crosses a threshold and has no open resource alert yet
+      const now = nowTimestamp();
+      const newAlerts: IncidentAlert[] = [];
+      const newLogs: SyslogEntry[] = [];
+      polled.forEach(d => {
+        const reasons = [
+          d.cpu >= CPU_THRESHOLD && `CPU ${d.cpu}% (threshold ${CPU_THRESHOLD}%)`,
+          d.ram >= RAM_THRESHOLD && `Memory ${d.ram}% (threshold ${RAM_THRESHOLD}%)`,
+        ].filter(Boolean);
+        if (reasons.length === 0) return;
+
+        const hasOpenAlert = alertsRef.current.some(
+          a => a.deviceName === d.name && a.category === 'High Resource Exhaustion' && a.status !== 'resolved'
+        );
+        if (hasOpenAlert) return;
+
+        const id = `${d.id}-${Date.now().toString(36)}`;
+        newAlerts.push({
+          id: `alt-${id}`,
+          timestamp: now,
+          deviceName: d.name,
+          deviceIp: d.ip,
+          severity: d.cpu >= 95 || d.ram >= 95 ? 'critical' : 'warning',
+          category: 'High Resource Exhaustion',
+          message: `Resource usage exceeded threshold: ${reasons.join(', ')}.`,
+          status: 'active',
+          notes: [],
+        });
+        newLogs.push({
+          id: `log-${id}`,
+          timestamp: now,
+          facility: 'SYSTEM',
+          severity: 'Warning',
+          host: d.name,
+          ip: d.ip,
+          tag: '%NETMON-4-THRESHOLD',
+          message: `Threshold exceeded: ${reasons.join(', ')}`,
+        });
+      });
+
+      setDevices(polled);
+      if (newAlerts.length > 0) {
+        setAlerts(prev => [...newAlerts, ...prev]);
+        setSyslogs(prev => [...newLogs, ...prev]);
+      }
       setIsTelemetrySyncing(false);
     }, 600);
   };
+
+  // Near real-time monitoring: poll automatically every SNMP interval
+  const refreshRef = useRef(refreshTelemetry);
+  refreshRef.current = refreshTelemetry;
+  useEffect(() => {
+    const seconds = Math.max(5, settings.snmpInterval || 30);
+    const timer = setInterval(() => refreshRef.current(), seconds * 1000);
+    return () => clearInterval(timer);
+  }, [settings.snmpInterval]);
 
   return (
     <NetworkDataContext.Provider

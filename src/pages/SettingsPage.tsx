@@ -267,17 +267,6 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             <div className="space-y-3.5 text-xs">
-              <div>
-                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('slackWebhookUrl')}</label>
-                <input
-                  type="text"
-                  value={formData.slackWebhook}
-                  onChange={e => setFormData({ ...formData, slackWebhook: e.target.value })}
-                  placeholder="https://hooks.slack.com/services/..."
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
-                />
-              </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('telegramToken')}</label>

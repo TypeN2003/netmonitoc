@@ -15,6 +15,8 @@ import {
   Cpu,
   Layers,
   CheckCircle2,
+  XCircle,
+  Wifi,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -28,16 +30,22 @@ import {
   Bar,
   Legend,
 } from 'recharts';
+import { CPU_THRESHOLD, RAM_THRESHOLD } from '../context/NetworkDataContext';
 
 export const DashboardPage: React.FC = () => {
   const { t } = useLanguage();
-  const { devices, clients, alerts, vlans, refreshTelemetry, isTelemetrySyncing } = useNetworkData();
-  const { currentUser } = useAuth();
+  const { devices, accessPoints, alerts, vlans, refreshTelemetry, isTelemetrySyncing } = useNetworkData();
+  const { currentUser, isViewer } = useAuth();
   const navigate = useNavigate();
 
   const totalDevices = devices.length;
-  const activeDevices = devices.filter(d => d.status === 'online').length;
-  const issueDevices = devices.filter(d => d.status !== 'online').length;
+  const onlineDevices = devices.filter(d => d.status === 'online').length;
+  const warningDevices = devices.filter(d => d.status === 'warning').length;
+  const offlineDevices = devices.filter(d => d.status === 'offline').length;
+  const highCpuDevices = devices.filter(d => d.cpu >= CPU_THRESHOLD).length;
+  const highRamDevices = devices.filter(d => d.ram >= RAM_THRESHOLD).length;
+  const onlineAps = accessPoints.filter(ap => ap.status !== 'offline').length;
+  const totalApClients = accessPoints.reduce((sum, ap) => sum + ap.connectedClients, 0);
   const activeCriticalAlerts = alerts.filter(a => a.severity === 'critical' && a.status === 'active');
 
   // Realistic telemetry data points (Gbps)
@@ -97,62 +105,66 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Top Metric Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Total Hardware Nodes */}
+      {/* Top Metric Cards: device counts by status + access points */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+        {/* Total Devices */}
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
             <span className="text-[11px] font-medium uppercase tracking-wider">{t('totalHardware')}</span>
             <Server className="w-4 h-4 text-cyan-500" />
           </div>
-          <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white tabular-nums">
-            {totalDevices * 24}
-          </div>
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-slate-500 font-mono">
-            <span>Routers, Switches & FW</span>
-          </div>
+          <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white tabular-nums">{totalDevices}</div>
+          <div className="mt-1 text-[11px] text-slate-500 font-mono">Router · Switch · Firewall · Server</div>
         </div>
 
-        {/* Healthy Active Nodes */}
+        {/* Online */}
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-[11px] font-medium uppercase tracking-wider">{t('activeNodes')}</span>
+            <span className="text-[11px] font-medium uppercase tracking-wider">{t('statusOnline')}</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
           </div>
-          <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 tabular-nums">
-            {activeDevices * 24}
-          </div>
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
-            <ArrowUpRight className="w-3 h-3" />
-            <span>98.6% Operational</span>
+          <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 tabular-nums">{onlineDevices}</div>
+          <div className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
+            {totalDevices > 0 ? ((onlineDevices / totalDevices) * 100).toFixed(1) : '0.0'}%
           </div>
         </div>
 
-        {/* Disconnected / Warning */}
+        {/* Warning (CPU / Memory over threshold) */}
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-[11px] font-medium uppercase tracking-wider">{t('disconnectedNodes')}</span>
+            <span className="text-[11px] font-medium uppercase tracking-wider">{t('statusWarning')}</span>
             <AlertTriangle className="w-4 h-4 text-amber-500" />
           </div>
-          <div className="text-2xl font-bold font-mono text-amber-500 tabular-nums">
-            {issueDevices}
-          </div>
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-500 font-mono">
-            <span>1 Degraded · 0 Offline</span>
+          <div className="text-2xl font-bold font-mono text-amber-500 tabular-nums">{warningDevices}</div>
+          <div className="mt-1 text-[11px] text-amber-500 font-mono">
+            CPU ≥ {CPU_THRESHOLD}%: {highCpuDevices} · RAM ≥ {RAM_THRESHOLD}%: {highRamDevices}
           </div>
         </div>
 
-        {/* Total Aggregate Throughput */}
+        {/* Offline */}
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-[11px] font-medium uppercase tracking-wider">{t('totalThroughput')}</span>
-            <Activity className="w-4 h-4 text-purple-500" />
+            <span className="text-[11px] font-medium uppercase tracking-wider">{t('statusOffline')}</span>
+            <XCircle className="w-4 h-4 text-rose-500" />
+          </div>
+          <div className="text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 tabular-nums">{offlineDevices}</div>
+          <div className="mt-1 text-[11px] text-slate-500 font-mono">ICMP unreachable</div>
+        </div>
+
+        {/* Access Points */}
+        <div
+          onClick={() => navigate('/access-points')}
+          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs cursor-pointer hover:border-cyan-400 transition-colors"
+        >
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
+            <span className="text-[11px] font-medium uppercase tracking-wider">{t('connectedAps')}</span>
+            <Wifi className="w-4 h-4 text-purple-500" />
           </div>
           <div className="text-2xl font-bold font-mono text-purple-600 dark:text-purple-400 tabular-nums">
-            8.6 <span className="text-xs font-normal text-slate-400">Gbps</span>
+            {onlineAps} <span className="text-xs font-normal text-slate-400">/ {accessPoints.length}</span>
           </div>
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-slate-500 font-mono">
-            <span>40G Fiber Backbone</span>
+          <div className="mt-1 text-[11px] text-slate-500 font-mono">
+            {totalApClients} {t('apClientsConnected')}
           </div>
         </div>
       </div>
@@ -301,12 +313,14 @@ export const DashboardPage: React.FC = () => {
                 Active segment consumption (Mbps)
               </span>
             </div>
-            <button
-              onClick={() => navigate('/vlans')}
-              className="text-xs text-cyan-600 dark:text-cyan-400 hover:underline font-medium"
-            >
-              {t('vlanAnalytics')} →
-            </button>
+            {!isViewer && (
+              <button
+                onClick={() => navigate('/vlans')}
+                className="text-xs text-cyan-600 dark:text-cyan-400 hover:underline font-medium"
+              >
+                {t('vlanAnalytics')} →
+              </button>
+            )}
           </div>
 
           <div className="h-56 w-full">
