@@ -56,9 +56,10 @@ export const PortsPage: React.FC = () => {
   const oddPorts = currentPorts.filter(p => p.id % 2 !== 0);
   const evenPorts = currentPorts.filter(p => p.id % 2 === 0);
 
-  type PortState = 'up' | 'down' | 'warning' | 'sfp';
+  type PortState = 'up' | 'down' | 'warning' | 'error' | 'sfp';
   const getPortState = (port: PortInfo): PortState => {
     if (!port.adminUp || port.status === 'down') return 'down';
+    if (port.status === 'error') return 'error';
     if (port.status === 'warning') return 'warning';
     if (port.portType === 'SFP+') return 'sfp';
     return 'up';
@@ -74,6 +75,11 @@ export const PortsPage: React.FC = () => {
       cell: 'bg-purple-500 dark:bg-purple-600 border-purple-600 dark:border-purple-500 text-white hover:bg-purple-600 dark:hover:bg-purple-500',
       notch: 'bg-purple-900/40',
     },
+    // Faulty port (bad cable, err-disabled): solid red so broken ports stand out from unused ones
+    error: {
+      cell: 'bg-rose-500 dark:bg-rose-600 border-rose-600 dark:border-rose-500 text-white hover:bg-rose-600 dark:hover:bg-rose-500',
+      notch: 'bg-rose-900/40',
+    },
     warning: {
       cell: 'bg-amber-400 dark:bg-amber-500 border-amber-500 dark:border-amber-400 text-amber-950 hover:bg-amber-500 dark:hover:bg-amber-400',
       notch: 'bg-amber-900/30',
@@ -86,7 +92,7 @@ export const PortsPage: React.FC = () => {
 
   const portCounts = currentPorts.reduce(
     (acc, p) => ({ ...acc, [getPortState(p)]: acc[getPortState(p)] + 1 }),
-    { up: 0, down: 0, warning: 0, sfp: 0 } as Record<PortState, number>
+    { up: 0, down: 0, warning: 0, error: 0, sfp: 0 } as Record<PortState, number>
   );
 
   const renderPort = (port: PortInfo, row: 'top' | 'bottom') => {
@@ -186,6 +192,7 @@ export const PortsPage: React.FC = () => {
             {(
               [
                 ['up', t('portUp'), 'bg-emerald-500 border-emerald-600'],
+                ['error', t('portError'), 'bg-rose-500 border-rose-600'],
                 ['down', t('portDown'), 'bg-white dark:bg-slate-800 border-dashed border-slate-400 dark:border-slate-500'],
                 ['warning', t('portWarning'), 'bg-amber-400 border-amber-500'],
                 ['sfp', '10G SFP+', 'bg-purple-500 border-purple-600'],
@@ -268,6 +275,17 @@ export const PortsPage: React.FC = () => {
 
             {/* Diagnostic Fields Grid */}
             <div className="space-y-3 text-xs">
+              {selectedPort.status === 'error' && selectedPort.fault && (
+                <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-semibold">{t('portError')}</div>
+                    <div className="text-[11px] mt-0.5">
+                      {t(selectedPort.fault === 'crc' ? 'portFaultCrc' : 'portFaultErrdisable')}
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50">
                   <span className="text-slate-500 dark:text-slate-400 block text-[11px] mb-0.5">
@@ -277,6 +295,8 @@ export const PortsPage: React.FC = () => {
                     className={`font-semibold font-mono ${
                       selectedPort.status === 'up'
                         ? 'text-emerald-500'
+                        : selectedPort.status === 'error'
+                        ? 'text-rose-500'
                         : selectedPort.status === 'warning'
                         ? 'text-amber-500'
                         : 'text-slate-400'

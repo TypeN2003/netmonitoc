@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useLanguage } from '../context/LanguageContext';
-import { useNetworkData } from '../context/NetworkDataContext';
+import { useNetworkData, DEFAULT_RUCKUS_ONE_URL } from '../context/NetworkDataContext';
 import { useAuth } from '../context/AuthContext';
 import {
   Wifi,
@@ -8,7 +8,7 @@ import {
   Users,
   RotateCw,
   Search,
-  Sparkles,
+  ExternalLink,
   Signal,
   CheckCircle2,
   AlertTriangle,
@@ -18,12 +18,12 @@ import { AccessPoint } from '../types';
 
 export const AccessPointsPage: React.FC = () => {
   const { t } = useLanguage();
-  const { accessPoints, rebootAccessPoint } = useNetworkData();
+  const { accessPoints, rebootAccessPoint, settings } = useNetworkData();
+  const ruckusOneUrl = settings.ruckusOneUrl || DEFAULT_RUCKUS_ONE_URL;
   const { isAdmin, isEngineer } = useAuth();
 
   const [search, setSearch] = useState('');
   const [rebootingId, setRebootingId] = useState<string | null>(null);
-  const [optimizing, setOptimizing] = useState(false);
 
   const filteredAps = accessPoints.filter(
     ap =>
@@ -37,14 +37,6 @@ export const AccessPointsPage: React.FC = () => {
     setRebootingId(apId);
     await rebootAccessPoint(apId);
     setRebootingId(null);
-  };
-
-  const handleOptimize = () => {
-    setOptimizing(true);
-    setTimeout(() => {
-      setOptimizing(false);
-      alert('RF Auto-Optimization Complete: Dynamic Channel Allocation (DCA) and Transmit Power Control (TPC) calibrated.');
-    }, 1500);
   };
 
   return (
@@ -61,16 +53,18 @@ export const AccessPointsPage: React.FC = () => {
           </p>
         </div>
 
-        {(isAdmin || isEngineer) && (
-          <button
-            onClick={handleOptimize}
-            disabled={optimizing}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-xs transition-all disabled:opacity-50"
-          >
-            <Sparkles className={`w-4 h-4 ${optimizing ? 'animate-spin' : ''}`} />
-            <span>{t('channelOptimization')}</span>
-          </button>
-        )}
+        {/* The faculty's APs are cloud-managed in RUCKUS One; its console cannot be embedded
+            (it sends X-Frame-Options: DENY), so it opens in a new tab */}
+        <a
+          href={ruckusOneUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={ruckusOneUrl}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-xs transition-all"
+        >
+          <ExternalLink className="w-4 h-4" />
+          <span>{t('openRuckusOne')}</span>
+        </a>
       </div>
 
       {/* Search Input */}

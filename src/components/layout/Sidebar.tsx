@@ -2,13 +2,14 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
-import { useNetworkData } from '../../context/NetworkDataContext';
+import { useNetworkData, DEFAULT_RUCKUS_ONE_URL } from '../../context/NetworkDataContext';
 import {
   LayoutDashboard,
   Server,
   Network,
   Layers,
   Wifi,
+  ExternalLink,
   GitFork,
   AlertTriangle,
   FileText,
@@ -22,7 +23,7 @@ import {
 export const Sidebar: React.FC = () => {
   const { currentUser, isAdmin, isEngineer, isViewer, canAccessUsers, canAccessSettings } = useAuth();
   const { t } = useLanguage();
-  const { alerts } = useNetworkData();
+  const { alerts, settings } = useNetworkData();
 
   const activeAlertCount = alerts.filter(a => a.status === 'active').length;
 
@@ -55,6 +56,8 @@ export const Sidebar: React.FC = () => {
       to: '/access-points',
       label: t('navAPs'),
       icon: Wifi,
+      // Wi-Fi is managed in the faculty's RUCKUS One cloud console (URL set in Settings)
+      externalUrl: settings.ruckusOneUrl || DEFAULT_RUCKUS_ONE_URL,
       roles: ['Admin', 'Engineer', 'Viewer'],
     },
     {
@@ -119,6 +122,24 @@ export const Sidebar: React.FC = () => {
 
         {filteredNavItems.map(item => {
           const Icon = item.icon;
+          if (item.externalUrl) {
+            return (
+              <a
+                key={item.to}
+                href={item.externalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={item.externalUrl}
+                className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all group text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Icon className="w-4 h-4 shrink-0 transition-transform group-hover:scale-110" />
+                  <span className="truncate">{item.label}</span>
+                </div>
+                <ExternalLink className="w-3 h-3 shrink-0 ml-1 opacity-60" />
+              </a>
+            );
+          }
           return (
             <NavLink
               key={item.to}
