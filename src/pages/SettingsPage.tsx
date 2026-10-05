@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
-import { useNetworkData } from '../context/NetworkDataContext';
+import { useNetworkData, DEFAULT_RUCKUS_ONE_URL } from '../context/NetworkDataContext';
 import { useAuth } from '../context/AuthContext';
 import { BackupManager } from '../components/settings/BackupManager';
 import {
@@ -25,7 +26,12 @@ export const SettingsPage: React.FC = () => {
   const { settings, updateSettings } = useNetworkData();
   const { currentUser, isAdmin } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'general' | 'webhooks' | 'backups' | 'security'>('general');
+  // ?tab=backups (e.g. from the Devices page) opens that tab directly
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<'general' | 'webhooks' | 'backups' | 'security'>(
+    requestedTab === 'webhooks' || requestedTab === 'backups' || requestedTab === 'security' ? requestedTab : 'general'
+  );
   const [formData, setFormData] = useState({ ...settings });
   const [testSent, setTestSent] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -144,37 +150,7 @@ export const SettingsPage: React.FC = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
-                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('orgName')}</label>
-                <input
-                  type="text"
-                  value={formData.orgName}
-                  onChange={e => setFormData({ ...formData, orgName: e.target.value })}
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">Default Core Gateway IP</label>
-                <input
-                  type="text"
-                  value={formData.gatewayIp}
-                  onChange={e => setFormData({ ...formData, gatewayIp: e.target.value })}
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">System Timezone</label>
-                <input
-                  type="text"
-                  value={formData.timezone}
-                  onChange={e => setFormData({ ...formData, timezone: e.target.value })}
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">System Default UI Language</label>
+                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('uiLanguageLabel')}</label>
                 <select
                   value={lang}
                   onChange={e => setLang(e.target.value as any)}
@@ -183,6 +159,19 @@ export const SettingsPage: React.FC = () => {
                   <option value="th">ภาษาไทย (Thai)</option>
                   <option value="en">English (US)</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('ruckusOneUrlLabel')}</label>
+                <input
+                  type="url"
+                  value={formData.ruckusOneUrl ?? DEFAULT_RUCKUS_ONE_URL}
+                  onChange={e => setFormData({ ...formData, ruckusOneUrl: e.target.value })}
+                  placeholder={DEFAULT_RUCKUS_ONE_URL}
+                  pattern="https://.*"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">{t('ruckusOneUrlHint')}</p>
               </div>
             </div>
           </div>
@@ -342,28 +331,6 @@ export const SettingsPage: React.FC = () => {
                   <option value={60}>60 Minutes (1 Hour)</option>
                   <option value={0}>Never (Persistent Session)</option>
                 </select>
-              </div>
-
-              <div className="space-y-3 pt-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.require2FA}
-                    onChange={e => setFormData({ ...formData, require2FA: e.target.checked })}
-                    className="rounded text-cyan-500"
-                  />
-                  <span className="text-slate-700 dark:text-slate-300">Enforce Multi-Factor Authentication (MFA/2FA)</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.autoBackupConfig}
-                    onChange={e => setFormData({ ...formData, autoBackupConfig: e.target.checked })}
-                    className="rounded text-cyan-500"
-                  />
-                  <span className="text-slate-700 dark:text-slate-300">Daily Automated Configuration Backup via TFTP/SCP</span>
-                </label>
               </div>
             </div>
           </div>

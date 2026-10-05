@@ -61,7 +61,9 @@ export interface NetworkDevice {
 export interface PortInfo {
   id: number;
   name: string;
-  status: 'up' | 'down' | 'warning';
+  status: 'up' | 'down' | 'warning' | 'error';
+  // Why an 'error' (faulty) port is broken
+  fault?: 'crc' | 'errdisable';
   speed: string;
   duplex: 'Full' | 'Half' | 'Auto';
   vlan: number;
@@ -139,7 +141,7 @@ export interface TopologyNode {
   label: string;
   ip: string;
   tier: 1 | 2 | 3 | 4 | 5;
-  type: 'wan' | 'firewall' | 'core_switch' | 'dist_switch' | 'edge_ap' | 'host_group' | 'server';
+  type: 'wan' | 'router' | 'firewall' | 'core_switch' | 'dist_switch' | 'edge_ap' | 'host_group' | 'server';
   status: 'online' | 'warning' | 'offline';
   x: number;
   y: number;
@@ -211,26 +213,10 @@ export interface ConfigBackup {
 }
 
 export interface BackupPolicy {
-  enabled: boolean;
-  frequency: 'daily' | 'weekly' | 'hourly' | 'on_change';
-  scheduledTime: string;
-  scheduledDay?: string;
-  protocol: 'SCP' | 'SFTP' | 'TFTP' | 'HTTPS';
-  serverIp: string;
-  serverPort: number;
-  storagePath: string;
-  username: string;
-  retentionRevisions: number;
-  enableEncryption: boolean;
-  encryptionAlgorithm: 'AES-256-GCM' | 'ChaCha20-Poly1305';
-  autoPurgeOld: boolean;
   lastGlobalBackup?: string;
 }
 
 export interface SystemSettings {
-  orgName: string;
-  gatewayIp: string;
-  timezone: string;
   snmpInterval: number;
   pingTimeoutMs: number;
   packetLossThreshold: number;
@@ -238,8 +224,8 @@ export interface SystemSettings {
   telegramChatId: string;
   emailNotification: string;
   sessionTimeoutMinutes: number;
-  require2FA: boolean;
-  autoBackupConfig: boolean;
   backupPolicy: BackupPolicy;
+  // Web console of the faculty's cloud-managed RUCKUS One Wi-Fi (opened from the Access Points page)
+  ruckusOneUrl?: string;
 }
 

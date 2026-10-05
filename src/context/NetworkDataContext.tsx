@@ -31,13 +31,11 @@ interface NetworkDataContextType {
   addDevice: (device: Omit<NetworkDevice, 'id' | 'uptime' | 'lastSeen'>) => void;
   updateDevice: (id: string, updates: Partial<NetworkDevice>) => void;
   deleteDevice: (id: string) => void;
-  importDeviceConfig: (
-    id: string,
-    configText: string,
-    mode?: 'merge' | 'replace',
-    enableRollback?: boolean,
-    author?: string
-  ) => { success: boolean; message: string; diffAdded: number; diffRemoved: number };
+  provisionDeviceFromConfig: (
+    device: Omit<NetworkDevice, 'id' | 'uptime' | 'lastSeen'>,
+    topology: { parentNodeId: string | null; linkType: TopologyLink['linkType'] },
+    author: string
+  ) => NetworkDevice;
   createBackup: (
     deviceId: string,
     versionTag: string,
@@ -666,33 +664,18 @@ const INITIAL_SYSLOGS: SyslogEntry[] = [
   { id: 'log-08', timestamp: '2026-09-28 15:55:10', facility: 'AUTH', severity: 'Notice', host: 'Perimeter-NGFW-Cluster', ip: '192.168.100.2', tag: '%FGT-5-VPN_IPSEC', message: 'IPsec tunnel TO_BRANCH_PATTAYA tunnel established' },
 ];
 
+export const DEFAULT_RUCKUS_ONE_URL = 'https://asia.ruckus.cloud';
+
 const INITIAL_SETTINGS: SystemSettings = {
-  orgName: 'NetMonitor Enterprise NOC',
-  gatewayIp: '10.10.0.1',
-  timezone: 'Asia/Bangkok (UTC+07:00)',
-  snmpInterval: 30,
+  ruckusOneUrl: DEFAULT_RUCKUS_ONE_URL,
+  snmpInterval: 300, // 5 minutes: keeps polling traffic low on the production network
   pingTimeoutMs: 1500,
   packetLossThreshold: 5,
   telegramBotToken: '6892419021:AAHEu9Wj42801Fkx_netmonitor_bot',
   telegramChatId: '-1002938491028',
   emailNotification: 'noc-alerts@kmutnb.ac.th',
   sessionTimeoutMinutes: 60,
-  require2FA: false,
-  autoBackupConfig: true,
   backupPolicy: {
-    enabled: true,
-    frequency: 'daily',
-    scheduledTime: '02:00',
-    scheduledDay: 'Sunday',
-    protocol: 'SCP',
-    serverIp: '10.10.100.250',
-    serverPort: 22,
-    storagePath: '/var/netmonitor/backups/devices/',
-    username: 'netbackup_svc',
-    retentionRevisions: 30,
-    enableEncryption: true,
-    encryptionAlgorithm: 'AES-256-GCM',
-    autoPurgeOld: true,
     lastGlobalBackup: '2026-09-28 02:00:45',
   },
 };
@@ -709,6 +692,16 @@ const BASELINE_TRAFFIC: Record<DeviceType, [number, number]> = {
   'Distribution Switch': [950, 610],
   'Edge Switch': [320, 180],
   Server: [640, 880],
+};
+
+// Where a device of each type sits on the topology map
+const TOPOLOGY_PLACEMENT: Record<DeviceType, { type: TopologyNode['type']; tier: TopologyNode['tier'] }> = {
+  Router: { type: 'router', tier: 1 },
+  Firewall: { type: 'firewall', tier: 2 },
+  'Core Switch': { type: 'core_switch', tier: 3 },
+  'Distribution Switch': { type: 'dist_switch', tier: 4 },
+  'Edge Switch': { type: 'edge_ap', tier: 5 },
+  Server: { type: 'server', tier: 4 },
 };
 
 const withTraffic = (d: NetworkDevice): NetworkDevice => {
@@ -979,22 +972,27 @@ const generateSwitchPorts = (totalPorts: number = 48): PortInfo[] => {
   for (let i = 1; i <= totalPorts; i++) {
     const isSfp = i > 44;
     const isDown = i % 7 === 0 || i % 11 === 0;
-    const isWarning = i === 24;
-    const status = isWarning ? 'warning' : isDown ? 'down' : 'up';
+    // Faulty ports: 24 has a bad cable (CRC errors), 36 was shut by BPDU Guard (err-disabled)
+    const fault = i === 24 ? 'crc' : i === 36 ? 'errdisable' : undefined;
+    // Degraded but still passing traffic
+    const isWarning = i === 18;
+    const status = fault ? 'error' : isWarning ? 'warning' : isDown ? 'down' : 'up';
+    const noTraffic = isDown || fault !== undefined;
     const vlan = vlanPool[i % vlanPool.length];
 
     ports.push({
       id: i,
       name: isSfp ? `Te1/1/${i - 44}` : `Gi1/0/${i}`,
       status,
+      fault,
       speed: isSfp ? '10Gbps' : isDown ? 'Auto' : '1000Mbps',
       duplex: isDown ? 'Auto' : 'Full',
       vlan,
       vlanName: vlanNames[vlan],
-      poeWatts: isDown || isSfp ? 0 : parseFloat((5 + Math.random() * 18).toFixed(1)),
-      inTrafficMbps: isDown ? 0 : Math.floor(20 + Math.random() * 450),
-      outTrafficMbps: isDown ? 0 : Math.floor(15 + Math.random() * 380),
-      errorDiscards: isWarning ? 284 : isDown ? 0 : Math.floor(Math.random() * 2),
+      poeWatts: noTraffic || isSfp ? 0 : parseFloat((5 + Math.random() * 18).toFixed(1)),
+      inTrafficMbps: noTraffic ? 0 : Math.floor(20 + Math.random() * 450),
+      outTrafficMbps: noTraffic ? 0 : Math.floor(15 + Math.random() * 380),
+      errorDiscards: fault === 'crc' ? 28400 : isWarning ? 37 : isDown ? 0 : Math.floor(Math.random() * 2),
       connectedDevice: isDown ? undefined : isSfp ? 'Uplink-Trunk' : `Host-Workstation-${100 + i}`,
       connectedMac: isDown ? undefined : `00:E0:4C:${(10 + i).toString(16)}:${(20 + i).toString(16)}:${(30 + i).toString(16)}`,
       adminUp: true,
@@ -1071,7 +1069,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
       [OFFLINE_DEMO_DEVICE.id]: generateSwitchPorts(24).map(p => ({ ...p, status: 'down' as const })),
     };
     // Saved port states (admin up/down toggles) win over the generated defaults
-    const saved = localStorage.getItem('netmonitor_ports');
+    const saved = localStorage.getItem('netmonitor_ports_v2');
     return saved ? { ...initialPorts, ...JSON.parse(saved) } : initialPorts;
   });
 
@@ -1108,7 +1106,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, [accessPoints]);
 
   useEffect(() => {
-    localStorage.setItem('netmonitor_ports', JSON.stringify(portsByDevice));
+    localStorage.setItem('netmonitor_ports_v2', JSON.stringify(portsByDevice));
   }, [portsByDevice]);
 
   const addDevice = (deviceData: Omit<NetworkDevice, 'id' | 'uptime' | 'lastSeen'>) => {
@@ -1141,71 +1139,98 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
     });
   };
 
-  const importDeviceConfig = (
-    id: string,
-    configText: string,
-    mode: 'merge' | 'replace' = 'merge',
-    enableRollback: boolean = false,
-    author: string = 'Operator'
-  ) => {
-    const target = devices.find(d => d.id === id);
-    if (!target) return { success: false, message: 'Device not found', diffAdded: 0, diffRemoved: 0 };
+  // Create a new device from an imported config: inventory entry, switch ports, a baseline
+  // backup of the config, a node on the topology map (linked to the chosen parent) and a syslog entry
+  const provisionDeviceFromConfig = (
+    deviceData: Omit<NetworkDevice, 'id' | 'uptime' | 'lastSeen'>,
+    topology: { parentNodeId: string | null; linkType: TopologyLink['linkType'] },
+    author: string
+  ): NetworkDevice => {
+    const now = nowTimestamp();
+    const newDevice: NetworkDevice = withTraffic({
+      ...deviceData,
+      id: uid('dev'),
+      uptime: '0d 00h 01m',
+      lastSeen: 'Just now',
+    });
+    setDevices(prev => [newDevice, ...prev]);
 
-    const oldLines = (target.config || '').split('\n').filter(Boolean);
-    const newLines = configText.split('\n').filter(Boolean);
-
-    let finalConfig = configText;
-    if (mode === 'merge' && target.config) {
-      finalConfig = target.config + '\n!\n! --- Dynamically Merged Updates ---\n' + configText;
+    if (newDevice.type.includes('Switch')) {
+      setPortsByDevice(prev => ({ ...prev, [newDevice.id]: generateSwitchPorts(newDevice.portsTotal || 24) }));
     }
 
-    // Auto archive pre-change backup before deploying!
-    const preBackup: ConfigBackup = {
-      id: `bk-pre-${Date.now().toString(36)}`,
-      deviceId: target.id,
-      deviceName: target.name,
-      deviceIp: target.ip,
-      deviceType: target.type,
-      versionTag: `Pre-Deploy (${new Date().toLocaleTimeString('en-US', { hour12: false })})`,
-      timestamp: nowTimestamp(),
-      sizeKb: parseFloat(((target.config || '').length / 1024).toFixed(1)) || 10.0,
-      checksumSha256: generateMockSha256((target.config || '') + target.id + Date.now()),
-      triggeredBy: author,
-      triggerType: 'pre-change',
-      configContent: target.config || '! Baseline Config',
-      format: target.type === 'Firewall' ? 'fortios' : 'cisco_ios',
-      notes: `Pre-deployment automated snapshot before ${mode.toUpperCase()} operation`,
-    };
-    setBackups(prev => [preBackup, ...prev]);
+    const config = newDevice.config || '';
+    setBackups(prev => [
+      {
+        id: uid('bk'),
+        deviceId: newDevice.id,
+        deviceName: newDevice.name,
+        deviceIp: newDevice.ip,
+        deviceType: newDevice.type,
+        versionTag: 'Initial Import',
+        timestamp: now,
+        sizeKb: parseFloat((config.length / 1024).toFixed(1)) || 0.1,
+        checksumSha256: generateMockSha256(config + newDevice.id),
+        triggeredBy: author,
+        triggerType: 'manual',
+        configContent: config,
+        format: newDevice.type === 'Firewall' ? 'fortios' : 'cisco_ios',
+        notes: 'Baseline config archived when the device was created from an imported file',
+      },
+      ...prev,
+    ]);
 
-    setDevices(prev =>
-      prev.map(d => {
-        if (d.id === id) {
-          return { ...d, config: finalConfig, lastSeen: 'Just now' };
-        }
-        return d;
-      })
-    );
+    // Place the node one row below its parent, sliding right until it does not overlap another node
+    const { type: nodeType, tier } = TOPOLOGY_PLACEMENT[newDevice.type];
+    const parent = topologyNodes.find(n => n.id === topology.parentNodeId) ?? null;
+    const y = parent ? parent.y + 150 : Math.max(0, ...topologyNodes.map(n => n.y)) + 150;
+    let x = parent ? parent.x : 620;
+    while (topologyNodes.some(n => Math.abs(n.y - y) < 80 && Math.abs(n.x - x) < 180)) x += 200;
 
-    const now = nowTimestamp();
-    const newLog: SyslogEntry = {
-      id: uid('log'),
-      timestamp: now,
-      facility: 'SYSTEM',
-      severity: 'Notice',
-      host: target.name,
-      ip: target.ip,
-      tag: '%SYS-5-CONFIG_I',
-      message: `Configured from NetMonitor console by ${author} (Strategy: ${mode.toUpperCase()}${enableRollback ? ', Watchdog Rollback: 300s' : ''})`,
+    const node: TopologyNode = {
+      id: uid('node'),
+      label: newDevice.name,
+      ip: newDevice.ip,
+      tier,
+      type: nodeType,
+      status: newDevice.status,
+      x,
+      y,
+      model: newDevice.model,
     };
-    setSyslogs(prev => [newLog, ...prev]);
+    const updatedNodes = [...topologyNodes, node];
+    setTopologyNodes(updatedNodes);
+    localStorage.setItem('netmonitor_topology_nodes', JSON.stringify(updatedNodes));
 
-    return {
-      success: true,
-      message: `Config successfully deployed to ${target.name} [${target.ip}]`,
-      diffAdded: newLines.length,
-      diffRemoved: mode === 'replace' ? oldLines.length : 0,
-    };
+    if (parent) {
+      persistLinks([
+        ...topologyLinks,
+        {
+          id: uid('link'),
+          source: parent.id,
+          target: node.id,
+          speed: linkSpeedLabels[topology.linkType],
+          linkType: topology.linkType,
+          status: 'up',
+        },
+      ]);
+    }
+
+    setSyslogs(prev => [
+      {
+        id: uid('log'),
+        timestamp: now,
+        facility: 'SYSTEM',
+        severity: 'Notice',
+        host: newDevice.name,
+        ip: newDevice.ip,
+        tag: '%NETMON-5-DEVICE_PROVISIONED',
+        message: `Device created from imported config by ${author}${parent ? ` and linked to ${parent.label}` : ''}`,
+      },
+      ...prev,
+    ]);
+
+    return newDevice;
   };
 
   const createBackup = (
@@ -1351,10 +1376,13 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const updated = list.map(p => {
         if (p.id === portId) {
           const nextAdmin = !p.adminUp;
+          // shutdown / no shutdown clears an err-disabled port, but a bad cable (CRC) stays faulty
+          const stillFaulty = nextAdmin && p.fault === 'crc';
           return {
             ...p,
             adminUp: nextAdmin,
-            status: (nextAdmin ? 'up' : 'down') as 'up' | 'down',
+            status: (nextAdmin ? (stillFaulty ? 'error' : 'up') : 'down') as PortInfo['status'],
+            fault: stillFaulty ? 'crc' : nextAdmin ? undefined : p.fault,
           };
         }
         return p;
@@ -1632,7 +1660,7 @@ export const NetworkDataProvider: React.FC<{ children: React.ReactNode }> = ({ c
         addDevice,
         updateDevice,
         deleteDevice,
-        importDeviceConfig,
+        provisionDeviceFromConfig,
         createBackup,
         deleteBackup,
         restoreBackup,

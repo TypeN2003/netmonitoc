@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useNetworkData } from '../../context/NetworkDataContext';
 import { useAuth } from '../../context/AuthContext';
-import { ConfigBackup, BackupPolicy } from '../../types';
+import { ConfigBackup } from '../../types';
 import {
   HardDrive,
   Clock,
@@ -17,15 +17,11 @@ import {
   AlertTriangle,
   Server,
   Search,
-  Filter,
-  Save,
-  Lock,
   Copy,
   Check,
   X,
   FileCode2,
   Terminal,
-  Activity,
   Layers,
 } from 'lucide-react';
 
@@ -36,17 +32,12 @@ export const BackupManager: React.FC = () => {
     backups,
     isBackingUp,
     settings,
-    updateSettings,
     deleteBackup,
     restoreBackup,
     runGlobalBackup,
     createBackup,
   } = useNetworkData();
   const { currentUser, isAdmin, isEngineer } = useAuth();
-
-  // Policy Form State
-  const [policy, setPolicy] = useState<BackupPolicy>({ ...settings.backupPolicy });
-  const [policySaved, setPolicySaved] = useState(false);
 
   // Search & Filter in Archive
   const [search, setSearch] = useState('');
@@ -72,20 +63,6 @@ export const BackupManager: React.FC = () => {
   const showNotification = (msg: string) => {
     setActionSuccessMessage(msg);
     setTimeout(() => setActionSuccessMessage(null), 3000);
-  };
-
-  // Save Policy
-  const handleSavePolicy = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isAdmin) {
-      alert('Only Administrator accounts can modify automated backup policies.');
-      return;
-    }
-    // Keep the last global backup time, which may have changed since this form was opened
-    updateSettings({ backupPolicy: { ...policy, lastGlobalBackup: settings.backupPolicy.lastGlobalBackup } });
-    setPolicySaved(true);
-    showNotification(t('settingsSaved'));
-    setTimeout(() => setPolicySaved(false), 2500);
   };
 
   // Run Global Backup
@@ -296,165 +273,6 @@ export const BackupManager: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Section 1: Automated Backup Policy Configuration */}
-      <div className="bg-white dark:bg-slate-900 p-5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Clock className="w-4 h-4 text-cyan-500" />
-            <span>{t('backupPolicyTitle')}</span>
-          </h3>
-          <span className="text-[11px] text-slate-400 font-mono">
-            {policy.enabled ? 'Status: Active Schedule' : 'Status: Disabled'}
-          </span>
-        </div>
-
-        <form onSubmit={handleSavePolicy} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Frequency */}
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">
-                {t('backupFrequency')}
-              </label>
-              <select
-                value={policy.frequency}
-                onChange={e => setPolicy({ ...policy, frequency: e.target.value as any })}
-                disabled={!isAdmin}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-medium focus:outline-none"
-              >
-                <option value="daily">{t('dailyAt')} 02:00 AM</option>
-                <option value="weekly">{t('weeklyAt')}</option>
-                <option value="hourly">{t('hourly')}</option>
-                <option value="on_change">{t('onChange')}</option>
-              </select>
-            </div>
-
-            {/* Protocol */}
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">
-                {t('backupProtocol')}
-              </label>
-              <select
-                value={policy.protocol}
-                onChange={e => setPolicy({ ...policy, protocol: e.target.value as any })}
-                disabled={!isAdmin}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
-              >
-                <option value="SCP">SCP (Secure Copy Protocol - Recommended)</option>
-                <option value="SFTP">SFTP (SSH File Transfer Protocol)</option>
-                <option value="HTTPS">HTTPS (REST Management API)</option>
-                <option value="TFTP">TFTP (Legacy Trivial FTP)</option>
-              </select>
-            </div>
-
-            {/* Remote Server IP */}
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">
-                {t('remoteServerIp')}
-              </label>
-              <input
-                type="text"
-                value={policy.serverIp}
-                onChange={e => setPolicy({ ...policy, serverIp: e.target.value })}
-                disabled={!isAdmin}
-                placeholder="10.10.100.250"
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
-              >
-              </input>
-            </div>
-
-            {/* Server Port */}
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">
-                {t('serverPort')}
-              </label>
-              <input
-                type="number"
-                value={policy.serverPort}
-                onChange={e => setPolicy({ ...policy, serverPort: parseInt(e.target.value) || 22 })}
-                disabled={!isAdmin}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* Storage Path */}
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">
-                {t('remotePath')}
-              </label>
-              <input
-                type="text"
-                value={policy.storagePath}
-                onChange={e => setPolicy({ ...policy, storagePath: e.target.value })}
-                disabled={!isAdmin}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
-              />
-            </div>
-
-            {/* Retention */}
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 mb-1 font-medium">
-                {t('retentionPolicy')}
-              </label>
-              <select
-                value={policy.retentionRevisions}
-                onChange={e => setPolicy({ ...policy, retentionRevisions: parseInt(e.target.value) || 30 })}
-                disabled={!isAdmin}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white font-mono focus:outline-none"
-              >
-                <option value={15}>15 {t('revisions')}</option>
-                <option value={30}>30 {t('revisions')} (Standard 1-Month)</option>
-                <option value={60}>60 {t('revisions')} (2-Months Retention)</option>
-                <option value={90}>90 {t('revisions')} (Quarterly Compliance)</option>
-              </select>
-            </div>
-
-            {/* Security Toggles */}
-            <div className="space-y-2 pt-2">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={policy.enableEncryption}
-                  onChange={e => setPolicy({ ...policy, enableEncryption: e.target.checked })}
-                  disabled={!isAdmin}
-                  className="rounded text-cyan-600 focus:ring-cyan-500"
-                />
-                <span className="text-slate-700 dark:text-slate-300 font-medium flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-cyan-500" />
-                  {t('enableEncryption')}
-                </span>
-              </label>
-
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={policy.autoPurgeOld}
-                  onChange={e => setPolicy({ ...policy, autoPurgeOld: e.target.checked })}
-                  disabled={!isAdmin}
-                  className="rounded text-cyan-600 focus:ring-cyan-500"
-                />
-                <span className="text-slate-700 dark:text-slate-300 font-medium">
-                  {t('autoPurge')}
-                </span>
-              </label>
-            </div>
-          </div>
-
-          {isAdmin && (
-            <div className="flex justify-end pt-2">
-              <button
-                type="submit"
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs shadow-sm transition-colors"
-              >
-                <Save className="w-3.5 h-3.5" />
-                <span>{t('saveSettings')}</span>
-              </button>
-            </div>
-          )}
-        </form>
       </div>
 
       {/* Section 2: Configuration Backup Archive & Repository Table */}
@@ -954,9 +772,6 @@ export const BackupManager: React.FC = () => {
 
             <div>
               <h3 className="font-bold text-base">{t('globalBackupRunning')}</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Connecting via {settings.backupPolicy.protocol} to devices on subnet 10.10.0.0/16
-              </p>
             </div>
 
             {/* Progress Bar */}

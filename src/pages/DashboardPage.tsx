@@ -105,7 +105,7 @@ export const DashboardPage: React.FC = () => {
       {/* Top Metric Cards: device counts by status */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Total Devices */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <div onClick={() => navigate('/devices')} className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs cursor-pointer hover:border-cyan-400 transition-colors">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
             <span className="text-[11px] font-medium uppercase tracking-wider">{t('totalHardware')}</span>
             <Server className="w-4 h-4 text-cyan-500" />
@@ -115,7 +115,7 @@ export const DashboardPage: React.FC = () => {
         </div>
 
         {/* Online */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <div onClick={() => navigate('/devices?status=online')} className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs cursor-pointer hover:border-emerald-400 transition-colors">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
             <span className="text-[11px] font-medium uppercase tracking-wider">{t('statusOnline')}</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
@@ -127,7 +127,7 @@ export const DashboardPage: React.FC = () => {
         </div>
 
         {/* Warning (CPU / Memory over threshold) */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <div onClick={() => navigate('/devices?status=warning')} className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs cursor-pointer hover:border-amber-400 transition-colors">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
             <span className="text-[11px] font-medium uppercase tracking-wider">{t('statusWarning')}</span>
             <AlertTriangle className="w-4 h-4 text-amber-500" />
@@ -139,7 +139,7 @@ export const DashboardPage: React.FC = () => {
         </div>
 
         {/* Offline */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <div onClick={() => navigate('/devices?status=offline')} className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs cursor-pointer hover:border-rose-400 transition-colors">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
             <span className="text-[11px] font-medium uppercase tracking-wider">{t('statusOffline')}</span>
             <XCircle className="w-4 h-4 text-rose-500" />

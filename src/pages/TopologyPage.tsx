@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   GitFork,
   Cloud,
+  Router,
   Shield,
   Server,
   Layers,
@@ -314,6 +315,8 @@ export const TopologyPage: React.FC = () => {
 
   const getNodeIcon = (type: TopologyNode['type']) => {
     switch (type) {
+      case 'router':
+        return <Router className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />;
       case 'wan':
         return <Cloud className="w-5 h-5 text-blue-600 dark:text-blue-400" />;
       case 'firewall':
@@ -864,6 +867,7 @@ export const TopologyPage: React.FC = () => {
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-slate-900 dark:text-white focus:outline-none"
                   >
                     <option value="wan">WAN / Internet</option>
+                    <option value="router">Router</option>
                     <option value="firewall">Firewall</option>
                     <option value="core_switch">Core Switch</option>
                     <option value="dist_switch">Distribution Switch</option>

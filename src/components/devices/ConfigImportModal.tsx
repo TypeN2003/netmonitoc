@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useNetworkData } from '../../context/NetworkDataContext';
 import { useAuth } from '../../context/AuthContext';
-import { NetworkDevice } from '../../types';
+import { DeviceType, TopologyLink } from '../../types';
 import {
   FileCode2,
   Upload,
@@ -10,18 +10,16 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
-  Split,
   FileText,
-  RotateCcw,
-  Code2,
-  Clock,
+  Server,
+  GitFork,
 } from 'lucide-react';
 
 interface ConfigImportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  targetDevice?: NetworkDevice | null;
 }
+
 
 // Built-in Enterprise Templates
 const SAMPLE_TEMPLATES = {
@@ -232,11 +230,111 @@ const validateConfig = (content: string): ValidationResult => {
   return { status: hasError ? 'error' : hasWarning ? 'warning' : 'valid', messages };
 };
 
-const getRunningConfig = (device?: NetworkDevice) =>
-  device
-    ? device.config ||
-      `! Running configuration for ${device.name} [${device.ip}]\n! Vendor: ${device.vendor} ${device.model}\nhostname ${device.name}\n!\nend`
-    : '';
+
+const DEVICE_TYPES: DeviceType[] = ['Router', 'Firewall', 'Core Switch', 'Distribution Switch', 'Edge Switch', 'Server'];
+
+const PORTS_BY_TYPE: Record<DeviceType, number> = {
+  Router: 8,
+  Firewall: 18,
+  'Core Switch': 48,
+  'Distribution Switch': 48,
+  'Edge Switch': 48,
+  Server: 8,
+};
+
+// The topology node type a new device of each type usually hangs off
+const PARENT_NODE_TYPE: Record<DeviceType, string> = {
+  Router: 'wan',
+  Firewall: 'router',
+  'Core Switch': 'firewall',
+  'Distribution Switch': 'core_switch',
+  'Edge Switch': 'dist_switch',
+  Server: 'core_switch',
+};
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+type DeviceForm = {
+  name: string;
+  ip: string;
+  type: DeviceType;
+  vendor: string;
+  model: string;
+  location: string;
+  rack: string;
+  firmware: string;
+  snmpCommunity: string;
+};
+
+const EMPTY_FORM: DeviceForm = {
+  name: '',
+  ip: '',
+  type: 'Edge Switch',
+  vendor: '',
+  model: '',
+  location: '',
+  rack: '',
+  firmware: '',
+  snmpCommunity: 'public_ro',
+};
+
+// Read what the config itself states about the device: hostname, management IP, vendor, OS version, role
+const parseConfig = (content: string): Partial<DeviceForm> => {
+  const text = content.trim();
+  if (!text) return {};
+
+  if (text.startsWith('{')) {
+    try {
+      const dev = JSON.parse(text).device ?? {};
+      return {
+        name: dev.hostname,
+        ip: dev.managementIp,
+        snmpCommunity: dev.snmpCommunity,
+        type: DEVICE_TYPES.includes(dev.type) ? dev.type : undefined,
+        vendor: dev.vendor,
+        model: dev.model,
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  const first = (re: RegExp) => text.match(re)?.[1];
+
+  if (/^config system (global|interface)/m.test(text)) {
+    return {
+      name: first(/set hostname\s+"?([^"\s]+)"?/),
+      ip: first(/set ip\s+(\d{1,3}(?:\.\d{1,3}){3})/),
+      type: 'Firewall',
+      vendor: 'Fortinet',
+      firmware: first(/FortiOS Version\s+([\d.]+)/i) ? `FortiOS ${first(/FortiOS Version\s+([\d.]+)/i)}` : undefined,
+    };
+  }
+
+  const hasSwitchports = /^\s*switchport/m.test(text);
+  const routes = /^router (ospf|bgp|eigrp|rip)/m.test(text) || /^ip route /m.test(text);
+  const type: DeviceType = hasSwitchports
+    ? /^ip routing/m.test(text) || routes
+      ? 'Distribution Switch'
+      : 'Edge Switch'
+    : routes
+    ? 'Router'
+    : 'Edge Switch';
+  const vendor = /aruba|aos-cx/i.test(text) ? 'Aruba Networks' : /cisco|ios-xe|\bios\b/i.test(text) ? 'Cisco Systems' : undefined;
+  const version = first(/^version\s+(\S+)/m);
+
+  return {
+    name: first(/^hostname\s+"?([^"\s]+)"?/m),
+    ip: first(/ip address\s+(\d{1,3}(?:\.\d{1,3}){3})/),
+    type,
+    vendor,
+    firmware: version ? `${vendor === 'Aruba Networks' ? 'AOS-CX' : 'Cisco IOS-XE'} ${version}` : undefined,
+    snmpCommunity: first(/snmp-server community\s+(\S+)/),
+  };
+};
+
+const randomMac = () =>
+  ['00', '1A', '2B', ...Array.from({ length: 3 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0').toUpperCase())].join(':');
 
 const StepLabel: React.FC<{ step: number; children: React.ReactNode }> = ({ step, children }) => (
   <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
@@ -245,83 +343,75 @@ const StepLabel: React.FC<{ step: number; children: React.ReactNode }> = ({ step
   </div>
 );
 
-export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
-  isOpen,
-  onClose,
-  targetDevice,
-}) => {
+const inputClass =
+  'w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-cyan-500';
+
+// Import a config file to create a new device: it is added to the inventory and placed on the topology map
+export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({ isOpen, onClose }) => {
   const { t } = useLanguage();
-  const { devices, importDeviceConfig } = useNetworkData();
+  const { devices, topologyNodes, provisionDeviceFromConfig } = useNetworkData();
   const { currentUser, isViewer } = useAuth();
 
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
-  const [configContent, setConfigContent] = useState<string>('');
-  const [fileName, setFileName] = useState<string>('');
+  const [configContent, setConfigContent] = useState('');
+  const [fileName, setFileName] = useState('');
   const [isDragging, setIsDragging] = useState(false);
-  const [activeTab, setActiveTab] = useState<'editor' | 'diff'>('editor');
-  const [deploymentMode, setDeploymentMode] = useState<'merge' | 'replace'>('merge');
-  const [enableRollback, setEnableRollback] = useState(true);
-  const [isDeploying, setIsDeploying] = useState(false);
-  const [deploySuccess, setDeploySuccess] = useState(false);
+  const [form, setForm] = useState<DeviceForm>(EMPTY_FORM);
+  // Fields the user typed in are not overwritten when the config is parsed again
+  const [touched, setTouched] = useState<Set<keyof DeviceForm>>(new Set());
+  const [parentNodeId, setParentNodeId] = useState<string>('');
+  const [parentTouched, setParentTouched] = useState(false);
+  const [linkType, setLinkType] = useState<TopologyLink['linkType']>('fiber_10g');
+  const [createdName, setCreatedName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
 
-  const currentDevice = devices.find(d => d.id === selectedDeviceId);
-  const runningConfig = getRunningConfig(currentDevice);
-  const isDirty = configContent !== runningConfig;
-
   // Start from a clean slate every time the modal opens
   useEffect(() => {
     if (!isOpen) return;
-    const device = targetDevice || devices[0];
-    setSelectedDeviceId(device?.id || '');
-    setConfigContent(getRunningConfig(device));
+    setConfigContent('');
     setFileName('');
-    setActiveTab('editor');
-    setDeploymentMode('merge');
-    setEnableRollback(true);
-    setIsDeploying(false);
-    setDeploySuccess(false);
-  }, [isOpen, targetDevice]);
+    setForm(EMPTY_FORM);
+    setTouched(new Set());
+    setParentNodeId('');
+    setParentTouched(false);
+    setLinkType('fiber_10g');
+    setCreatedName(null);
+  }, [isOpen]);
+
+  // Fill the device fields from the config, leaving anything the user edited alone
+  useEffect(() => {
+    const parsed = parseConfig(configContent);
+    setForm(prev => {
+      const next = { ...prev };
+      (Object.keys(parsed) as (keyof DeviceForm)[]).forEach(key => {
+        const value = parsed[key];
+        if (value && !touched.has(key)) (next[key] as string) = value;
+      });
+      return next;
+    });
+  }, [configContent]);
+
+  // Suggest where the device connects on the map from its type, until the user picks one
+  useEffect(() => {
+    if (parentTouched) return;
+    const parent = topologyNodes.find(n => n.type === PARENT_NODE_TYPE[form.type]);
+    setParentNodeId(parent?.id ?? '');
+    setLinkType(form.type === 'Edge Switch' || form.type === 'Server' ? 'copper_1g' : 'fiber_10g');
+  }, [form.type, parentTouched, topologyNodes]);
 
   const validation = useMemo(() => validateConfig(configContent), [configContent]);
 
-  // Line-by-line diff between current running config & proposed config
-  const { diffLines, addedCount, removedCount } = useMemo(() => {
-    const running = (currentDevice?.config || '').split('\n');
-    const proposed = configContent.split('\n');
-    const runningSet = new Set(running.map(l => l.trim()));
-    const proposedSet = new Set(proposed.map(l => l.trim()));
-
-    const lines: { type: 'added' | 'removed' | 'unchanged'; content: string; lineNum?: number }[] = [];
-
-    if (deploymentMode === 'replace') {
-      running.forEach((line, idx) => {
-        if (line.trim() && !proposedSet.has(line.trim())) {
-          lines.push({ type: 'removed', content: line, lineNum: idx + 1 });
-        }
-      });
-    }
-
-    proposed.forEach((line, idx) => {
-      const added = line.trim() && !runningSet.has(line.trim());
-      lines.push({ type: added ? 'added' : 'unchanged', content: line, lineNum: idx + 1 });
-    });
-
-    return {
-      diffLines: lines,
-      addedCount: lines.filter(d => d.type === 'added').length,
-      removedCount: lines.filter(d => d.type === 'removed').length,
-    };
-  }, [currentDevice, configContent, deploymentMode]);
-
   if (!isOpen) return null;
+
+  const setField = (key: keyof DeviceForm, value: string) => {
+    setForm(prev => ({ ...prev, [key]: value }));
+    setTouched(prev => new Set(prev).add(key));
+  };
 
   const loadContent = (content: string, name: string) => {
     setConfigContent(content);
     setFileName(name);
-    setActiveTab('editor');
   };
 
   const processFile = (file?: File) => {
@@ -334,45 +424,73 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
     reader.readAsText(file);
   };
 
-  const handleDeviceChange = (id: string) => {
-    if (isDirty && !confirm(t('cfgConfirmDiscard'))) return;
-    setSelectedDeviceId(id);
-    loadContent(getRunningConfig(devices.find(d => d.id === id)), '');
-  };
-
   const handleLoadTemplate = (key: string) => {
     const tpl = SAMPLE_TEMPLATES[key as keyof typeof SAMPLE_TEMPLATES];
     if (tpl) loadContent(tpl.content, tpl.name);
   };
 
-  const handleDeploy = () => {
-    if (!currentDevice) return;
-    if (isViewer) {
-      alert('Access Denied: Viewer accounts have read-only privileges.');
-      return;
-    }
-    if (deploymentMode === 'replace' && !confirm(t('cfgConfirmReplace').replace('{name}', currentDevice.name))) {
-      return;
-    }
+  const name = form.name.trim();
+  const ip = form.ip.trim();
+  const problems = [
+    !configContent.trim() && t('cfgNeedConfig'),
+    validation.status === 'error' && t('syntaxError'),
+    !name && t('cfgNeedName'),
+    !ip ? t('cfgNeedIp') : !IPV4.test(ip) && t('cfgBadIp'),
+    !form.model.trim() && t('cfgNeedModel'),
+    name && devices.some(d => d.name.toLowerCase() === name.toLowerCase()) && t('cfgDuplicateName'),
+    ip && devices.some(d => d.ip === ip) && t('cfgDuplicateIp'),
+  ].filter(Boolean) as string[];
+  const canCreate = !isViewer && problems.length === 0;
 
-    setIsDeploying(true);
-
-    // Simulate connection and checksum transmission
-    setTimeout(() => {
-      const author = currentUser ? `${currentUser.name} (${currentUser.role})` : 'Operator';
-      importDeviceConfig(currentDevice.id, configContent, deploymentMode, enableRollback, author);
-      setIsDeploying(false);
-      setDeploySuccess(true);
-      setTimeout(() => {
-        setDeploySuccess(false);
-        onClose();
-      }, 1800);
-    }, 1200);
+  const handleCreate = () => {
+    if (!canCreate) return;
+    const author = currentUser ? `${currentUser.name} (${currentUser.role})` : 'Operator';
+    const portsTotal = PORTS_BY_TYPE[form.type];
+    provisionDeviceFromConfig(
+      {
+        name,
+        ip,
+        mac: randomMac(),
+        type: form.type,
+        vendor: form.vendor.trim() || 'Unknown',
+        model: form.model.trim(),
+        location: form.location.trim() || '-',
+        rack: form.rack.trim() || '-',
+        status: 'online',
+        cpu: 12,
+        ram: 28,
+        temp: 34,
+        portsTotal,
+        portsUp: portsTotal,
+        pingMs: 1.0,
+        firmware: form.firmware.trim() || '-',
+        snmpCommunity: form.snmpCommunity.trim() || 'public_ro',
+        config: configContent,
+      },
+      { parentNodeId: parentNodeId || null, linkType },
+      author
+    );
+    setCreatedName(name);
+    setTimeout(onClose, 1500);
   };
 
   const totalLines = configContent ? configContent.split('\n').length : 0;
-  const hasChanges = addedCount > 0 || removedCount > 0;
-  const canDeploy = !isDeploying && !isViewer && !!currentDevice && configContent.trim() !== '' && validation.status !== 'error' && hasChanges;
+
+  const field = (key: keyof DeviceForm, label: string, opts: { required?: boolean; mono?: boolean; placeholder?: string } = {}) => (
+    <div>
+      <label className="block text-[11px] text-slate-600 dark:text-slate-400 mb-1 font-medium">
+        {label}
+        {opts.required && <span className="text-rose-500"> *</span>}
+      </label>
+      <input
+        type="text"
+        value={form[key]}
+        onChange={e => setField(key, e.target.value)}
+        placeholder={opts.placeholder}
+        className={`${inputClass} ${opts.mono ? 'font-mono' : ''}`}
+      />
+    </div>
+  );
 
   return (
     <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
@@ -396,46 +514,21 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
           </button>
         </div>
 
-        {/* Success Alert Banner */}
-        {deploySuccess && (
-          <div className="p-4 bg-emerald-50 dark:bg-emerald-950/90 border-b border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 text-xs flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-              <span className="font-semibold">{t('deploySuccess')}</span>
-            </div>
-            <span className="font-mono text-[11px]">
-              {currentDevice?.name} ({currentDevice?.ip})
+        {/* Success Banner */}
+        {createdName && (
+          <div className="p-4 bg-emerald-50 dark:bg-emerald-950/90 border-b border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+            <span className="font-semibold">
+              {t('cfgCreated')}: {createdName}
             </span>
           </div>
         )}
 
         <div className="p-5 overflow-y-auto space-y-5 flex-1">
-          {/* Step 1: Target Device */}
+          {/* Step 1: Config */}
           <section className="space-y-2">
-            <StepLabel step={1}>{t('cfgStepDevice')}</StepLabel>
-            <select
-              value={selectedDeviceId}
-              onChange={e => handleDeviceChange(e.target.value)}
-              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500"
-            >
-              {devices.map(d => (
-                <option key={d.id} value={d.id}>
-                  {d.name} — {d.ip} ({d.type})
-                </option>
-              ))}
-            </select>
-            {currentDevice && (
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono px-1">
-                {currentDevice.vendor} · {currentDevice.model}
-              </p>
-            )}
-          </section>
+            <StepLabel step={1}>{t('cfgStepConfig')}</StepLabel>
 
-          {/* Step 2: Config Content */}
-          <section className="space-y-2">
-            <StepLabel step={2}>{t('cfgStepConfig')}</StepLabel>
-
-            {/* Source toolbar */}
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -471,133 +564,55 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
                 ))}
               </select>
 
-              {isDirty && (
-                <button
-                  type="button"
-                  onClick={() => loadContent(runningConfig, '')}
-                  className="px-2.5 py-1.5 rounded-lg text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  {t('cfgResetRunning')}
-                </button>
-              )}
-
               {fileName && (
                 <span className="text-[11px] text-cyan-600 dark:text-cyan-400 flex items-center gap-1 truncate max-w-full">
                   <FileText className="w-3.5 h-3.5 shrink-0" />
                   <span className="truncate">{fileName}</span>
                 </span>
               )}
+              <span className="ml-auto text-[11px] text-slate-400 font-mono">
+                {totalLines} {t('cfgLines')}
+              </span>
             </div>
 
-            {/* Editor / Diff tabs */}
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-50 dark:bg-slate-950">
-              <div className="flex items-center justify-between px-2 py-1.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('editor')}
-                    className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 ${
-                      activeTab === 'editor'
-                        ? 'bg-cyan-50 dark:bg-cyan-950/50 text-cyan-700 dark:text-cyan-300'
-                        : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    <Code2 className="w-3.5 h-3.5" />
-                    {t('configEditor')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('diff')}
-                    className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 ${
-                      activeTab === 'diff'
-                        ? 'bg-cyan-50 dark:bg-cyan-950/50 text-cyan-700 dark:text-cyan-300'
-                        : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    <Split className="w-3.5 h-3.5" />
-                    {t('compareDiff')}
-                    {hasChanges && (
-                      <span className="font-mono text-[10px]">
-                        <span className="text-emerald-600 dark:text-emerald-400">+{addedCount}</span>
-                        {removedCount > 0 && <span className="text-rose-600 dark:text-rose-400"> -{removedCount}</span>}
-                      </span>
-                    )}
-                  </button>
-                </div>
-                <span className="text-[11px] text-slate-400 font-mono">
-                  {totalLines} {t('cfgLines')}
-                </span>
-              </div>
-
-              {activeTab === 'editor' ? (
-                <div
-                  className="relative flex h-72"
-                  onDragOver={e => {
-                    e.preventDefault();
-                    setIsDragging(true);
-                  }}
-                  onDragLeave={() => setIsDragging(false)}
-                  onDrop={e => {
-                    e.preventDefault();
-                    setIsDragging(false);
-                    processFile(e.dataTransfer.files?.[0]);
-                  }}
-                >
-                  {/* Line numbers (scroll-synced with the textarea) */}
-                  <div
-                    ref={gutterRef}
-                    className="w-10 py-3 overflow-hidden bg-slate-100/70 dark:bg-slate-900/60 text-slate-400 dark:text-slate-600 font-mono text-xs select-none text-right pr-2 border-r border-slate-200 dark:border-slate-800"
-                  >
-                    {Array.from({ length: Math.max(1, totalLines) }).map((_, i) => (
-                      <div key={i} className="leading-5">
-                        {i + 1}
-                      </div>
-                    ))}
+            <div
+              className="relative flex h-56 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-50 dark:bg-slate-950"
+              onDragOver={e => {
+                e.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={e => {
+                e.preventDefault();
+                setIsDragging(false);
+                processFile(e.dataTransfer.files?.[0]);
+              }}
+            >
+              {/* Line numbers (scroll-synced with the textarea) */}
+              <div
+                ref={gutterRef}
+                className="w-10 py-3 overflow-hidden bg-slate-100/70 dark:bg-slate-900/60 text-slate-400 dark:text-slate-600 font-mono text-xs select-none text-right pr-2 border-r border-slate-200 dark:border-slate-800"
+              >
+                {Array.from({ length: Math.max(1, totalLines) }).map((_, i) => (
+                  <div key={i} className="leading-5">
+                    {i + 1}
                   </div>
-                  <textarea
-                    value={configContent}
-                    onChange={e => setConfigContent(e.target.value)}
-                    onScroll={e => {
-                      if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
-                    }}
-                    spellCheck={false}
-                    placeholder={t('cfgEditorHint')}
-                    className="flex-1 bg-transparent text-slate-800 dark:text-emerald-400 font-mono text-xs p-3 focus:outline-none leading-5 resize-none whitespace-pre overflow-auto"
-                  />
-                  {isDragging && (
-                    <div className="absolute inset-0 border-2 border-dashed border-cyan-500 bg-cyan-500/10 rounded-b-xl flex flex-col items-center justify-center gap-1.5 text-cyan-700 dark:text-cyan-300 text-xs font-semibold pointer-events-none">
-                      <Upload className="w-5 h-5" />
-                      {t('cfgDropHint')}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="h-72 overflow-y-auto p-2 space-y-0.5 font-mono text-xs">
-                  {!hasChanges ? (
-                    <div className="text-slate-500 text-center py-8">{t('cfgNoChanges')}</div>
-                  ) : (
-                    diffLines.map((line, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex items-start px-2 py-0.5 rounded leading-5 ${
-                          line.type === 'added'
-                            ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-l-2 border-emerald-500'
-                            : line.type === 'removed'
-                            ? 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-l-2 border-rose-500'
-                            : 'text-slate-500 dark:text-slate-400'
-                        }`}
-                      >
-                        <span className="w-8 select-none text-slate-400 dark:text-slate-600 text-[10px] text-right pr-2">
-                          {line.lineNum || ''}
-                        </span>
-                        <span className="w-4 select-none font-bold">
-                          {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-                        </span>
-                        <span className="flex-1 whitespace-pre-wrap">{line.content}</span>
-                      </div>
-                    ))
-                  )}
+                ))}
+              </div>
+              <textarea
+                value={configContent}
+                onChange={e => setConfigContent(e.target.value)}
+                onScroll={e => {
+                  if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
+                }}
+                spellCheck={false}
+                placeholder={t('cfgEditorHint')}
+                className="flex-1 bg-transparent text-slate-800 dark:text-emerald-400 font-mono text-xs p-3 focus:outline-none leading-5 resize-none whitespace-pre overflow-auto"
+              />
+              {isDragging && (
+                <div className="absolute inset-0 border-2 border-dashed border-cyan-500 bg-cyan-500/10 rounded-xl flex flex-col items-center justify-center gap-1.5 text-cyan-700 dark:text-cyan-300 text-xs font-semibold pointer-events-none">
+                  <Upload className="w-5 h-5" />
+                  {t('cfgDropHint')}
                 </div>
               )}
             </div>
@@ -645,73 +660,87 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
             )}
           </section>
 
-          {/* Step 3: Deployment Strategy */}
+          {/* Step 2: Device details, filled from the config */}
           <section className="space-y-2">
-            <StepLabel step={3}>{t('cfgStepApply')}</StepLabel>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <label
-                className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
-                  deploymentMode === 'merge'
-                    ? 'border-cyan-500 bg-cyan-50 dark:bg-cyan-950/30'
-                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="deployMode"
-                  checked={deploymentMode === 'merge'}
-                  onChange={() => setDeploymentMode('merge')}
-                  className="mt-0.5 text-cyan-600 focus:ring-cyan-500"
-                />
-                <div>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">{t('modeMerge')}</span>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{t('modeMergeDesc')}</p>
-                </div>
-              </label>
-
-              <label
-                className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
-                  deploymentMode === 'replace'
-                    ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/30'
-                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="deployMode"
-                  checked={deploymentMode === 'replace'}
-                  onChange={() => setDeploymentMode('replace')}
-                  className="mt-0.5 text-rose-600 focus:ring-rose-500"
-                />
-                <div>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">{t('modeReplace')}</span>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{t('modeReplaceDesc')}</p>
-                </div>
-              </label>
+            <StepLabel step={2}>{t('cfgStepDeviceInfo')}</StepLabel>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <Server className="w-3.5 h-3.5 text-cyan-500" />
+              {t('cfgParsedHint')}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {field('name', t('deviceName'), { required: true, placeholder: 'e.g. Dist-SW-Building-E' })}
+              {field('ip', t('ipAddress'), { required: true, mono: true, placeholder: '10.10.0.5' })}
+              <div>
+                <label className="block text-[11px] text-slate-600 dark:text-slate-400 mb-1 font-medium">
+                  {t('type')}
+                  <span className="text-rose-500"> *</span>
+                </label>
+                <select value={form.type} onChange={e => setField('type', e.target.value)} className={inputClass}>
+                  {DEVICE_TYPES.map(type => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {field('vendor', t('cfgVendor'), { placeholder: 'Cisco Systems' })}
+              {field('model', t('cfgModel'), { required: true, placeholder: 'Catalyst 9300-48P' })}
+              {field('firmware', t('cfgFirmware'), { mono: true, placeholder: 'Cisco IOS-XE 17.09' })}
+              {field('location', t('locationRack'), { placeholder: 'Building E - IDF 1' })}
+              {field('rack', t('cfgRack'), { mono: true, placeholder: 'Rack-E1 (Unit 10)' })}
             </div>
+          </section>
 
-            <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-700 dark:text-slate-300 px-1 pt-1">
-              <input
-                type="checkbox"
-                checked={enableRollback}
-                onChange={e => setEnableRollback(e.target.checked)}
-                className="rounded text-cyan-500 focus:ring-cyan-500"
-              />
-              <Clock className="w-3.5 h-3.5 text-cyan-500" />
-              {t('commitConfirmed')}
-            </label>
-            <p className="text-[11px] text-slate-400 px-1">{t('cfgAutoBackup')}</p>
+          {/* Step 3: Topology placement */}
+          <section className="space-y-2">
+            <StepLabel step={3}>{t('cfgStepTopology')}</StepLabel>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('cfgConnectTo')}</label>
+                <select
+                  value={parentNodeId}
+                  onChange={e => {
+                    setParentNodeId(e.target.value);
+                    setParentTouched(true);
+                  }}
+                  className={inputClass}
+                >
+                  <option value="">{t('cfgNoConnection')}</option>
+                  {topologyNodes.map(n => (
+                    <option key={n.id} value={n.id}>
+                      {n.label} ({n.ip})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-600 dark:text-slate-400 mb-1 font-medium">{t('cfgLinkType')}</label>
+                <select
+                  value={linkType}
+                  disabled={!parentNodeId}
+                  onChange={e => {
+                    setLinkType(e.target.value as TopologyLink['linkType']);
+                    setParentTouched(true);
+                  }}
+                  className={`${inputClass} disabled:opacity-50`}
+                >
+                  <option value="fiber_40g">40G Fiber</option>
+                  <option value="fiber_10g">10G Fiber</option>
+                  <option value="copper_1g">1G Copper</option>
+                  <option value="trunk">802.1Q Trunk</option>
+                </select>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-400 flex items-center gap-1.5">
+              <GitFork className="w-3.5 h-3.5" />
+              {t('cfgTopologyHint')}
+            </p>
           </section>
         </div>
 
         {/* Footer Actions */}
         <div className="px-6 py-3.5 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-            {t('cfgSummary')}:{' '}
-            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">+{addedCount}</span>{' '}
-            <span className="text-rose-600 dark:text-rose-400 font-semibold">-{removedCount}</span>
-          </div>
-
+          <div className="text-[11px] text-rose-500 min-h-[1em]">{problems[0] ?? ''}</div>
           <div className="flex items-center gap-2.5">
             <button
               type="button"
@@ -720,32 +749,14 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
             >
               {t('cancel')}
             </button>
-
             <button
               type="button"
-              disabled={!canDeploy}
-              onClick={handleDeploy}
-              className={`px-5 py-2 rounded-xl text-white font-semibold text-xs flex items-center gap-2 transition-all ${
-                isDeploying
-                  ? 'bg-slate-600 cursor-wait'
-                  : !canDeploy
-                  ? 'bg-slate-400 dark:bg-slate-700 cursor-not-allowed opacity-60'
-                  : deploymentMode === 'replace'
-                  ? 'bg-rose-600 hover:bg-rose-500'
-                  : 'bg-cyan-600 hover:bg-cyan-500'
-              }`}
+              disabled={!canCreate || !!createdName}
+              onClick={handleCreate}
+              className="px-5 py-2 rounded-xl text-white font-semibold text-xs flex items-center gap-2 transition-all bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-400 dark:disabled:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isDeploying ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>{t('cfgDeploying')}</span>
-                </>
-              ) : (
-                <>
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>{t('applyAndDeploy')}</span>
-                </>
-              )}
+              <Server className="w-3.5 h-3.5" />
+              <span>{t('cfgCreateButton')}</span>
             </button>
           </div>
         </div>
