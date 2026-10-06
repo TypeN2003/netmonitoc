@@ -62,8 +62,9 @@ npm run dev
 
 | ความสามารถ | Admin | Engineer | Viewer |
 |---|---|---|---|
-| Dashboard, อุปกรณ์, Topology, Alerts | ✓ | ✓ | ดูอย่างเดียว |
-| พอร์ต, VLAN, Syslog, สถิติ | ✓ | ✓ | – |
+| Dashboard, Topology, สถานะอุปกรณ์ (Online / Warning / Offline) | ✓ | ✓ | ดูอย่างเดียว |
+| รายละเอียดอุปกรณ์ (CPU, RAM, Traffic, พอร์ต) | ✓ | ✓ | – |
+| Alerts, พอร์ต, VLAN, Syslog, สถิติ | ✓ | ✓ | – |
 | สร้างอุปกรณ์จาก Config, สำรอง Config, SSH | ✓ | ✓ | – |
 | ลบอุปกรณ์, จัดการผู้ใช้ | ✓ | – | – |
 | ตั้งค่าระบบ | ✓ | ✓ | – |

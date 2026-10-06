@@ -24,7 +24,7 @@ import {
 import { Role } from '../../types';
 
 export const Header: React.FC = () => {
-  const { currentUser, logout, switchRole, isAdmin, isEngineer } = useAuth();
+  const { currentUser, logout, switchRole, isAdmin, isEngineer, isViewer } = useAuth();
   const { lang, setLang, t } = useLanguage();
   const { theme, toggleTheme } = useTheme();
   const { alerts, devices, accessPoints } = useNetworkData();
@@ -240,17 +240,19 @@ export const Header: React.FC = () => {
                   ))
                 )}
               </div>
-              <div className="p-2 border-t border-slate-200 dark:border-slate-700 text-center">
-                <button
-                  onClick={() => {
-                    navigate('/alerts');
-                    setShowAlertsDropdown(false);
-                  }}
-                  className="w-full text-center py-1 text-cyan-600 dark:text-cyan-400 hover:underline font-medium text-xs"
-                >
-                  {t('viewAllAlerts')} →
-                </button>
-              </div>
+              {!isViewer && (
+                <div className="p-2 border-t border-slate-200 dark:border-slate-700 text-center">
+                  <button
+                    onClick={() => {
+                      navigate('/alerts');
+                      setShowAlertsDropdown(false);
+                    }}
+                    className="w-full text-center py-1 text-cyan-600 dark:text-cyan-400 hover:underline font-medium text-xs"
+                  >
+                    {t('viewAllAlerts')} →
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

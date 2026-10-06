@@ -252,16 +252,20 @@ export const DevicesPage: React.FC = () => {
                 <th className="py-3 px-4">{t('locationRack')}</th>
                 <th className="py-3 px-4 text-center">{t('statusFilter')}</th>
                 <th className="py-3 px-4 text-right">{t('uptime')}</th>
-                <th className="py-3 px-4 text-right">{t('cpuRam')}</th>
-                <th className="py-3 px-4 text-right">{t('trafficInOut')}</th>
-                <th className="py-3 px-4 text-right">{t('portsUp')}</th>
+                {!isViewer && (
+                  <>
+                    <th className="py-3 px-4 text-right">{t('cpuRam')}</th>
+                    <th className="py-3 px-4 text-right">{t('trafficInOut')}</th>
+                    <th className="py-3 px-4 text-right">{t('portsUp')}</th>
+                  </>
+                )}
                 <th className="py-3 px-4 text-center">{t('actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans">
               {filteredDevices.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-8 text-center text-slate-400">
+                  <td colSpan={isViewer ? 8 : 11} className="py-8 text-center text-slate-400">
                     {t('devicesEmpty')}
                   </td>
                 </tr>
@@ -311,7 +315,9 @@ export const DevicesPage: React.FC = () => {
                       {device.uptime}
                     </td>
 
-                    {/* CPU & RAM */}
+                    {/* Device details (CPU/RAM, traffic, ports): Admin & Engineer only, per scope 2.3.6.2.3 Viewer sees status only */}
+                    {!isViewer && (
+                      <>
                     <td className="py-3 px-4 text-right font-mono tabular-nums">
                       <div className={device.cpu > 80 ? 'text-rose-500 font-bold' : 'text-slate-700 dark:text-slate-300'}>
                         CPU: {device.cpu}%
@@ -330,6 +336,8 @@ export const DevicesPage: React.FC = () => {
                       <span className="font-semibold text-emerald-600 dark:text-emerald-400">{portCounts(device).up}</span>
                       <span className="text-slate-400"> / {portCounts(device).total}</span>
                     </td>
+                      </>
+                    )}
 
                     {/* Actions */}
                     <td className="py-3 px-4 text-center">
