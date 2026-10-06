@@ -54,7 +54,7 @@ export default function App() {
                   <Route path="/vlans" element={<ProtectedRoute allowedRoles={['Admin', 'Engineer']}><VlansPage /></ProtectedRoute>} />
                   <Route path="/access-points" element={<AccessPointsPage />} />
                   <Route path="/topology" element={<TopologyPage />} />
-                  <Route path="/alerts" element={<AlertsPage />} />
+                  <Route path="/alerts" element={<ProtectedRoute allowedRoles={['Admin', 'Engineer']}><AlertsPage /></ProtectedRoute>} />
                   <Route path="/event-logs" element={<ProtectedRoute allowedRoles={['Admin', 'Engineer']}><EventLogsPage /></ProtectedRoute>} />
                   <Route path="/statistics" element={<ProtectedRoute allowedRoles={['Admin', 'Engineer']}><StatisticsPage /></ProtectedRoute>} />
 

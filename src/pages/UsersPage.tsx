@@ -4,8 +4,6 @@ import { useAuth } from '../context/AuthContext';
 import {
   ShieldCheck,
   Plus,
-  Eye,
-  EyeOff,
   Trash2,
   Lock,
   User as UserIcon,
@@ -30,7 +28,6 @@ export const UsersPage: React.FC = () => {
   } = useAuth();
 
   const [showAddModal, setShowAddModal] = useState(false);
-  const [visiblePasswords, setVisiblePasswords] = useState<Record<string, boolean>>({});
 
   const [newUser, setNewUser] = useState({
     name: '',
@@ -49,13 +46,6 @@ export const UsersPage: React.FC = () => {
       canRebootDevices: true,
     },
   });
-
-  const togglePasswordVisibility = (userId: string) => {
-    setVisiblePasswords(prev => ({
-      ...prev,
-      [userId]: !prev[userId],
-    }));
-  };
 
   const handleCreateUser = (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,7 +119,6 @@ export const UsersPage: React.FC = () => {
                 <th className="py-3 px-4">{t('userEmail')}</th>
                 <th className="py-3 px-4">{t('department')}</th>
                 <th className="py-3 px-4">{t('role')}</th>
-                <th className="py-3 px-4">{t('password')}</th>
                 <th className="py-3 px-4">Status</th>
                 <th className="py-3 px-4 text-right">Last Login</th>
                 <th className="py-3 px-4 text-center">{t('actions')}</th>
@@ -137,7 +126,6 @@ export const UsersPage: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans">
               {users.map(u => {
-                const isPasswordShown = !!visiblePasswords[u.id];
                 const isSelf = currentUser?.id === u.id;
                 return (
                   <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
@@ -178,22 +166,6 @@ export const UsersPage: React.FC = () => {
                         <option value="Engineer" className="bg-white text-slate-900 dark:bg-slate-900 dark:text-white">Engineer</option>
                         <option value="Viewer" className="bg-white text-slate-900 dark:bg-slate-900 dark:text-white">Viewer</option>
                       </select>
-                    </td>
-
-                    {/* Password Visibility Toggle */}
-                    <td className="py-3 px-4 font-mono">
-                      <div className="flex items-center gap-2">
-                        <span className="text-slate-700 dark:text-slate-300 text-xs">
-                          {isPasswordShown ? u.password : '••••••••'}
-                        </span>
-                        <button
-                          onClick={() => togglePasswordVisibility(u.id)}
-                          title={t('togglePassword')}
-                          className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-                        >
-                          {isPasswordShown ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
                     </td>
 
                     {/* Status */}

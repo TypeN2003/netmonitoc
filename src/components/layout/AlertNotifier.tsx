@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../../context/LanguageContext';
 import { useNetworkData, alertText } from '../../context/NetworkDataContext';
+import { useAuth } from '../../context/AuthContext';
 import { IncidentAlert } from '../../types';
 import { AlertTriangle, Bell, ShieldAlert, X } from 'lucide-react';
 
@@ -13,6 +14,7 @@ const canUseBrowserNotifications = () => typeof window !== 'undefined' && 'Notif
 export const AlertNotifier: React.FC = () => {
   const { t, lang } = useLanguage();
   const { alerts } = useNetworkData();
+  const { isViewer } = useAuth();
   const navigate = useNavigate();
 
   const [toasts, setToasts] = useState<IncidentAlert[]>([]);
@@ -65,15 +67,17 @@ export const AlertNotifier: React.FC = () => {
               </div>
               <p className="text-slate-600 dark:text-slate-300 mt-0.5 line-clamp-2">{alertText(alert, lang).message}</p>
               <div className="flex items-center gap-3 mt-2">
-                <button
-                  onClick={() => {
-                    dismiss(alert.id);
-                    navigate('/alerts');
-                  }}
-                  className="font-semibold text-cyan-600 dark:text-cyan-400 hover:underline"
-                >
-                  {t('viewAllAlerts')} →
-                </button>
+                {!isViewer && (
+                  <button
+                    onClick={() => {
+                      dismiss(alert.id);
+                      navigate('/alerts');
+                    }}
+                    className="font-semibold text-cyan-600 dark:text-cyan-400 hover:underline"
+                  >
+                    {t('viewAllAlerts')} →
+                  </button>
+                )}
                 {permission === 'default' && (
                   <button
                     onClick={enableDesktop}

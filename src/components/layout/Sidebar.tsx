@@ -71,7 +71,7 @@ export const Sidebar: React.FC = () => {
       label: t('navAlerts'),
       icon: AlertTriangle,
       badge: activeAlertCount > 0 ? activeAlertCount : undefined,
-      roles: ['Admin', 'Engineer', 'Viewer'],
+      roles: ['Admin', 'Engineer'],
     },
     {
       to: '/event-logs',

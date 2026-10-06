@@ -336,20 +336,22 @@ export const DashboardPage: React.FC = () => {
                 Actionable NOC alerts requiring investigation
               </span>
             </div>
-            <button
-              onClick={() => navigate('/alerts')}
-              className="text-xs text-cyan-600 dark:text-cyan-400 hover:underline font-medium"
-            >
-              {t('viewAllAlerts')} →
-            </button>
+            {!isViewer && (
+              <button
+                onClick={() => navigate('/alerts')}
+                className="text-xs text-cyan-600 dark:text-cyan-400 hover:underline font-medium"
+              >
+                {t('viewAllAlerts')} →
+              </button>
+            )}
           </div>
 
           <div className="space-y-2.5">
             {alerts.slice(0, 3).map(alert => (
               <div
                 key={alert.id}
-                onClick={() => navigate('/alerts')}
-                className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                onClick={() => !isViewer && navigate('/alerts')}
+                className={`p-3 rounded-lg border transition-all ${isViewer ? '' : 'cursor-pointer'} ${
                   alert.severity === 'critical'
                     ? 'bg-rose-50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/60 hover:border-rose-500'
                     : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/60 hover:border-amber-500'
